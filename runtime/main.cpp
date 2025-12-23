@@ -1,6 +1,8 @@
-#include <engine/core/application.h>
+#include <engine/core/engine.h>
 
 int main(int argc, char** argv) {
-  maple::Application app{};
+  maple::Engine app{};
+  app.Init();
+  app.Run();
   return 0;
 }
