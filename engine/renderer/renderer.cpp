@@ -25,7 +25,7 @@ namespace maple {
 struct Renderer::Impl {
   VkInstance mVkInstance = VK_NULL_HANDLE;
   VkDebugUtilsMessengerEXT mDebugMessenger = VK_NULL_HANDLE;
-  VkPhysicalDevice mSelectedDevice = VK_NULL_HANDLE;
+  size_t mSelectedDeviceIdx = 0;
 
   std::vector<VkExtensionProperties> mAvailableInstanceExtensions;
   std::vector<VkLayerProperties> mAvailableInstanceLayers;
@@ -128,8 +128,8 @@ struct Renderer::Impl {
 
     for (const auto& e : candidates) MAPLE_INFO("\tScore {}: {}", mPhysicalDevicesData[e.second].properties.deviceName, e.first);
 
-    mSelectedDevice = mPhysicalDevices[candidates.rbegin()->second];
-    MAPLE_INFO("Selected Graphics Device {}", mPhysicalDevicesData[candidates.rbegin()->second].properties.deviceName);
+    mSelectedDeviceIdx = candidates.rbegin()->second;
+    MAPLE_INFO("Selected Graphics Device {}", mPhysicalDevicesData[mSelectedDeviceIdx].properties.deviceName);
   }
 
   void probePhysicalDevices() {
