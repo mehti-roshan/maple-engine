@@ -2,11 +2,11 @@
 #include <engine/logging/log_macros.h>
 #include <engine/renderer/renderer.h>
 
+#define GLFW_INCLUDE_VULKAN
+#include <GLFW/glfw3.h>
+
 #define GLM_FORCE_RADIANS
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
-#include <GLFW/glfw3.h>
-#include <GLFW/glfw3native.h>
-
 #include <glm/mat4x4.hpp>
 #include <glm/vec4.hpp>
 #include <iostream>
@@ -27,6 +27,12 @@ struct Engine::Impl {
     uint32_t glfwRequiredExtensionsCount = 0;
     const char** glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwRequiredExtensionsCount);
     mRenderer.Init(glfwRequiredExtensionsCount, glfwExtensions);
+
+    VkSurfaceKHR surface = VK_NULL_HANDLE;
+    if (glfwCreateWindowSurface(mRenderer.GetInstance(), mWindow, nullptr, &surface) != VK_SUCCESS)
+      MAPLE_FATAL("Failed to create window surface");
+    
+    mRenderer.SetSurface(surface);
   }
 
   void Run() {

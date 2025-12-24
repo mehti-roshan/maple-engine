@@ -27,6 +27,7 @@ struct Renderer::Impl {
   VkDebugUtilsMessengerEXT mDebugMessenger = VK_NULL_HANDLE;
   size_t mSelectedDeviceIdx = 0;
   VkDevice mDevice = VK_NULL_HANDLE;
+  VkSurfaceKHR mVkSurface = VK_NULL_HANDLE;
 
   std::vector<VkExtensionProperties> mAvailableInstanceExtensions;
   std::vector<VkLayerProperties> mAvailableInstanceLayers;
@@ -42,16 +43,21 @@ struct Renderer::Impl {
     probePhysicalDevices();
     selectPhysicalDevice();
     createLogicalDevice();
+    // createSwapChain
   }
 
   void Destroy() {
     MAPLE_INFO("Cleaning Renderer...");
+    vkDestroySurfaceKHR(mVkInstance, mVkSurface, nullptr);
     vkDestroyDevice(mDevice, nullptr);
 
     if (validationLayers.size() > 0) DestroyDebugUtilsMessengerEXT(mVkInstance, mDebugMessenger, nullptr);
 
     vkDestroyInstance(mVkInstance, nullptr);
   }
+
+  VkInstance GetInstance() const { return mVkInstance; }
+  void SetSurface(VkSurfaceKHR surface) { mVkSurface = surface; }
 
   void createLogicalDevice() {
     const auto graphicsQueueIdx = GetGraphicsQueueIdxWithCapability(mPhysicalDevicesData[mSelectedDeviceIdx], GraphicsQueueCapabilityType::GRAPHICS);
@@ -230,5 +236,8 @@ void Renderer::Init(const uint32_t requiredExtensionsCount, const char* const* r
   mPimpl->Init(requiredExtensionsCount, requiredExtensions);
 }
 void Renderer::Destroy() { mPimpl->Destroy(); }
+
+VkInstance Renderer::GetInstance() const { return mPimpl->GetInstance(); }
+void Renderer::SetSurface(VkSurfaceKHR surface) { mPimpl->SetSurface(surface); }
 
 }  // namespace maple

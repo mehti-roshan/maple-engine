@@ -2,7 +2,6 @@
 #include <memory>
 
 struct GLFWwindow;
-struct VkInstance;
 
 namespace maple {
 class Engine {
