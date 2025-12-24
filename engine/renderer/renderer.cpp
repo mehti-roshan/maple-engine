@@ -34,7 +34,7 @@ struct Renderer::Impl {
   std::vector<VkPhysicalDevice> mPhysicalDevices;
   std::vector<PhysicalDeviceData> mPhysicalDevicesData;
 
-  void Init(const uint32_t requiredExtensionsCount, const char* const* requiredExtensions) {
+  void Init(const uint32_t requiredExtensionsCount, const char* const* requiredExtensions, std::function<VkSurfaceKHR(VkInstance)> surfaceCreateCallback) {
     MAPLE_INFO("Initializing Renderer...");
     probeInstanceExtensions();
     probeInstanceLayers();
@@ -43,6 +43,14 @@ struct Renderer::Impl {
     probePhysicalDevices();
     selectPhysicalDevice();
     createLogicalDevice();
+
+    mVkSurface = surfaceCreateCallback(mVkInstance);
+
+    VkBool32 presentSupported = false;
+    vkGetPhysicalDeviceSurfaceSupportKHR(mPhysicalDevices[mSelectedDeviceIdx], GetGraphicsQueueIdxWithCapability(mPhysicalDevicesData[mSelectedDeviceIdx], GraphicsQueueCapabilityType::GRAPHICS).value(), mVkSurface, &presentSupported);
+    if (!presentSupported)
+      MAPLE_FATAL("Device cannot present images to window surface");
+    
     // createSwapChain
   }
 
@@ -55,9 +63,6 @@ struct Renderer::Impl {
 
     vkDestroyInstance(mVkInstance, nullptr);
   }
-
-  VkInstance GetInstance() const { return mVkInstance; }
-  void SetSurface(VkSurfaceKHR surface) { mVkSurface = surface; }
 
   void createLogicalDevice() {
     const auto graphicsQueueIdx = GetGraphicsQueueIdxWithCapability(mPhysicalDevicesData[mSelectedDeviceIdx], GraphicsQueueCapabilityType::GRAPHICS);
@@ -232,12 +237,9 @@ struct Renderer::Impl {
 
 Renderer::Renderer() : mPimpl(std::make_unique<Impl>()) {}
 Renderer::~Renderer() {}
-void Renderer::Init(const uint32_t requiredExtensionsCount, const char* const* requiredExtensions) {
-  mPimpl->Init(requiredExtensionsCount, requiredExtensions);
+void Renderer::Init(const uint32_t requiredExtensionsCount, const char* const* requiredExtensions, std::function<VkSurfaceKHR(VkInstance)> surfaceCreateCallback) {
+  mPimpl->Init(requiredExtensionsCount, requiredExtensions, surfaceCreateCallback);
 }
 void Renderer::Destroy() { mPimpl->Destroy(); }
-
-VkInstance Renderer::GetInstance() const { return mPimpl->GetInstance(); }
-void Renderer::SetSurface(VkSurfaceKHR surface) { mPimpl->SetSurface(surface); }
 
 }  // namespace maple

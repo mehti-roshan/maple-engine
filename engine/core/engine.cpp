@@ -26,13 +26,11 @@ struct Engine::Impl {
     initGLFW();
     uint32_t glfwRequiredExtensionsCount = 0;
     const char** glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwRequiredExtensionsCount);
-    mRenderer.Init(glfwRequiredExtensionsCount, glfwExtensions);
-
-    VkSurfaceKHR surface = VK_NULL_HANDLE;
-    if (glfwCreateWindowSurface(mRenderer.GetInstance(), mWindow, nullptr, &surface) != VK_SUCCESS)
-      MAPLE_FATAL("Failed to create window surface");
-    
-    mRenderer.SetSurface(surface);
+    mRenderer.Init(glfwRequiredExtensionsCount, glfwExtensions, [&](VkInstance instance) {
+      VkSurfaceKHR surface = VK_NULL_HANDLE;
+      if (glfwCreateWindowSurface(instance, mWindow, nullptr, &surface) != VK_SUCCESS) MAPLE_FATAL("Failed to create window surface");
+      return surface;
+    });
   }
 
   void Run() {

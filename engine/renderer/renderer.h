@@ -1,8 +1,12 @@
 #pragma once
 #include <memory>
+#include <functional>
 
 typedef struct VkInstance_T* VkInstance;
 typedef struct VkSurfaceKHR_T* VkSurfaceKHR;
+
+// creates a VkSurfaceKHR using the provided VkInstance
+using SurfaceCreateCallback = std::function<VkSurfaceKHR(VkInstance)>;
 
 namespace maple {
 
@@ -11,11 +15,8 @@ class Renderer {
   Renderer();
   ~Renderer();
 
-  void Init(const uint32_t requiredExtensionsCount, const char* const* requiredExtensions);
+  void Init(const uint32_t requiredExtensionsCount, const char* const* requiredExtensions, SurfaceCreateCallback surfaceCreateCallback);
   void Destroy();
-
-  VkInstance GetInstance() const;
-  void SetSurface(VkSurfaceKHR surface);
 
  private:
   struct Impl;
