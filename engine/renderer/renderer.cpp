@@ -49,14 +49,17 @@ namespace maple {
 struct Renderer::Impl {
   VkInstance mVkInstance = VK_NULL_HANDLE;
   VkDebugUtilsMessengerEXT mDebugMessenger = VK_NULL_HANDLE;
+  VkPhysicalDevice mSelectedDevice = VK_NULL_HANDLE;
 
-  std::vector<VkExtensionProperties> availableInstanceExtensions;
-  std::vector<VkLayerProperties> availableInstanceLayers;
+  std::vector<VkExtensionProperties> mAvailableInstanceExtensions;
+  std::vector<VkLayerProperties> mAvailableInstanceLayers;
+  std::vector<VkPhysicalDevice> mAvailableDevices;
 
   void Init(const uint32_t requiredExtensionsCount, const char* const* requiredExtensions) {
     MAPLE_INFO("Initializing Renderer...");
     createVulkanInstance(requiredExtensionsCount, requiredExtensions);
     setupDebugCallback();
+    selectPhysicalDevice();
   }
   void Destroy() {
     MAPLE_INFO("Cleaning Renderer...");
@@ -68,28 +71,28 @@ struct Renderer::Impl {
   void createVulkanInstance(const uint32_t requiredExtensionsCount, const char* const* windowRequiredExtensions) {
     uint32_t numExtensions = 0;
     vkEnumerateInstanceExtensionProperties(nullptr, &numExtensions, nullptr);
-    availableInstanceExtensions.resize(numExtensions);
-    vkEnumerateInstanceExtensionProperties(nullptr, &numExtensions, availableInstanceExtensions.data());
+    mAvailableInstanceExtensions.resize(numExtensions);
+    vkEnumerateInstanceExtensionProperties(nullptr, &numExtensions, mAvailableInstanceExtensions.data());
 
     uint32_t numLayers = 0;
     vkEnumerateInstanceLayerProperties(&numLayers, nullptr);
-    availableInstanceLayers.resize(numLayers);
-    vkEnumerateInstanceLayerProperties(&numLayers, availableInstanceLayers.data());
+    mAvailableInstanceLayers.resize(numLayers);
+    vkEnumerateInstanceLayerProperties(&numLayers, mAvailableInstanceLayers.data());
 
     MAPLE_INFO("Available Vulkan instance extensions:");
-    for (const auto& e : availableInstanceExtensions) {
+    for (const auto& e : mAvailableInstanceExtensions) {
       MAPLE_INFO("\t{}: {}", e.extensionName, e.specVersion);
     }
 
     MAPLE_INFO("Available Vulkan instance layers:");
-    for (const auto& l : availableInstanceLayers) {
+    for (const auto& l : mAvailableInstanceLayers) {
       MAPLE_INFO("\t{}: {}, {}, ({})", l.layerName, l.specVersion, l.implementationVersion, l.description);
     }
 
     for (const char* layerName : validationLayers) {
       bool found = false;
 
-      for (const auto& l : availableInstanceLayers) {
+      for (const auto& l : mAvailableInstanceLayers) {
         if (strcmp(layerName, l.layerName) == 0) {
           found = true;
           break;
@@ -134,6 +137,10 @@ struct Renderer::Impl {
 
     if (CreateDebugUtilsMessengerEXT(mVkInstance, &createInfo, nullptr, &mDebugMessenger) != VK_SUCCESS)
       MAPLE_FATAL("Failed to create a Vulkan debug messenger");
+  }
+
+  void selectPhysicalDevice() {
+    
   }
 };  // namespace maple
 
