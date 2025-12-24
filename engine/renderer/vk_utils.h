@@ -10,14 +10,14 @@ struct GraphicsQueueCapabilities {
 
 GraphicsQueueCapabilities GetGraphicsQueueCapabilities(VkQueueFlags flags) {
   return GraphicsQueueCapabilities{
-      .Graphics = static_cast<bool>(VK_QUEUE_GRAPHICS_BIT),
-      .Compute = static_cast<bool>(VK_QUEUE_COMPUTE_BIT),
-      .Transfer = static_cast<bool>(VK_QUEUE_TRANSFER_BIT),
-      .Sparse_binding = static_cast<bool>(VK_QUEUE_SPARSE_BINDING_BIT),
-      .Protected = static_cast<bool>(VK_QUEUE_PROTECTED_BIT),
-      .Video_decode = static_cast<bool>(VK_QUEUE_VIDEO_DECODE_BIT_KHR),
-      .Video_encode = static_cast<bool>(VK_QUEUE_VIDEO_ENCODE_BIT_KHR),
-      .Optical_flow = static_cast<bool>(VK_QUEUE_OPTICAL_FLOW_BIT_NV),
+      .Graphics = static_cast<bool>(flags & VK_QUEUE_GRAPHICS_BIT),
+      .Compute = static_cast<bool>(flags & VK_QUEUE_COMPUTE_BIT),
+      .Transfer = static_cast<bool>(flags & VK_QUEUE_TRANSFER_BIT),
+      .Sparse_binding = static_cast<bool>(flags & VK_QUEUE_SPARSE_BINDING_BIT),
+      .Protected = static_cast<bool>(flags & VK_QUEUE_PROTECTED_BIT),
+      .Video_decode = static_cast<bool>(flags & VK_QUEUE_VIDEO_DECODE_BIT_KHR),
+      .Video_encode = static_cast<bool>(flags & VK_QUEUE_VIDEO_ENCODE_BIT_KHR),
+      .Optical_flow = static_cast<bool>(flags & VK_QUEUE_OPTICAL_FLOW_BIT_NV),
   };
 }
 
