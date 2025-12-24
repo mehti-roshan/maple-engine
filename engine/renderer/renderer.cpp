@@ -2,57 +2,22 @@
 #include <engine/renderer/renderer.h>
 #include <vulkan/vulkan.h>
 
+#include <map>
+
+#include "vk_utils.h"
+
 const std::vector<const char*> validationLayers = {
 #ifndef NDEBUG
     "VK_LAYER_KHRONOS_validation"
 #endif
 };
 
-VkResult CreateDebugUtilsMessengerEXT(
-    VkInstance instance, const VkDebugUtilsMessengerCreateInfoEXT* pCreateInfo,
-    const VkAllocationCallbacks* pAllocator,
-    VkDebugUtilsMessengerEXT* pDebugMessenger) {
-  auto func = (PFN_vkCreateDebugUtilsMessengerEXT)vkGetInstanceProcAddr(
-      instance, "vkCreateDebugUtilsMessengerEXT");
-  if (func != nullptr) {
-    return func(instance, pCreateInfo, pAllocator, pDebugMessenger);
-  } else {
-    return VK_ERROR_EXTENSION_NOT_PRESENT;
-  }
-}
-
-void DestroyDebugUtilsMessengerEXT(VkInstance instance,
-                                   VkDebugUtilsMessengerEXT debugMessenger,
-                                   const VkAllocationCallbacks* pAllocator) {
-  auto func = (PFN_vkDestroyDebugUtilsMessengerEXT)vkGetInstanceProcAddr(
-      instance, "vkDestroyDebugUtilsMessengerEXT");
-  if (func != nullptr) {
-    func(instance, debugMessenger, pAllocator);
-  }
-}
-
-static VKAPI_ATTR VkBool32 VKAPI_CALL
-vulkanDebugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
-                    VkDebugUtilsMessageTypeFlagsEXT messageType,
-                    const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
-                    void* pUserData) {
+static VKAPI_ATTR VkBool32 VKAPI_CALL vulkanDebugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
+                                                          VkDebugUtilsMessageTypeFlagsEXT messageType,
+                                                          const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData, void* pUserData) {
   MAPLE_DEBUG("Vulkan validation layer: {}", pCallbackData->pMessage);
 
   return VK_FALSE;
-}
-
-void populateDebugMessengerCreateInfo(
-    VkDebugUtilsMessengerCreateInfoEXT& createInfo) {
-  createInfo = {
-      .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,
-      .messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT |
-                         VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
-                         VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT,
-      .messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
-                     VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
-                     VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT,
-      .pfnUserCallback = vulkanDebugCallback,
-  };
 }
 
 namespace maple {
@@ -64,28 +29,27 @@ struct Renderer::Impl {
 
   std::vector<VkExtensionProperties> mAvailableInstanceExtensions;
   std::vector<VkLayerProperties> mAvailableInstanceLayers;
-  std::vector<VkPhysicalDevice> mAvailableDevices;
+  std::vector<VkPhysicalDevice> mPhysicalDevices;
+  std::vector<PhysicalDeviceData> mPhysicalDevicesData;
 
-  void Init(const uint32_t requiredExtensionsCount,
-            const char* const* requiredExtensions) {
+  void Init(const uint32_t requiredExtensionsCount, const char* const* requiredExtensions) {
     MAPLE_INFO("Initializing Renderer...");
     probeInstanceExtensions();
     probeInstanceLayers();
     createVulkanInstance(requiredExtensionsCount, requiredExtensions);
     setupDebugCallback();
+    probePhysicalDevices();
     selectPhysicalDevice();
   }
 
   void Destroy() {
     MAPLE_INFO("Cleaning Renderer...");
-    if (validationLayers.size() > 0)
-      DestroyDebugUtilsMessengerEXT(mVkInstance, mDebugMessenger, nullptr);
+    if (validationLayers.size() > 0) DestroyDebugUtilsMessengerEXT(mVkInstance, mDebugMessenger, nullptr);
 
     vkDestroyInstance(mVkInstance, nullptr);
   }
 
-  void createVulkanInstance(const uint32_t requiredExtensionsCount,
-                            const char* const* windowRequiredExtensions) {
+  void createVulkanInstance(const uint32_t requiredExtensionsCount, const char* const* windowRequiredExtensions) {
     for (const char* layerName : validationLayers) {
       bool found = false;
 
@@ -96,90 +60,130 @@ struct Renderer::Impl {
         }
       }
 
-      if (!found)
-        MAPLE_FATAL("Failed to find required Vulkan instance layer \"{}\"",
-                    layerName);
+      if (!found) MAPLE_FATAL("Failed to find required Vulkan instance layer \"{}\"", layerName);
     }
 
-    std::vector<const char*> requiredExtensions(
-        windowRequiredExtensions,
-        windowRequiredExtensions + requiredExtensionsCount);
-    if (validationLayers.size() > 0)
-      requiredExtensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+    std::vector<const char*> requiredExtensions(windowRequiredExtensions, windowRequiredExtensions + requiredExtensionsCount);
+    if (validationLayers.size() > 0) requiredExtensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
 
     VkApplicationInfo appInfo{};
     appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
-    appInfo.pApplicationName = "Application name";  // TODO: replace
-    appInfo.applicationVersion =
-        VK_MAKE_API_VERSION(0, 1, 0, 0);  // TODO: replace
+    appInfo.pApplicationName = "Application name";                 // TODO: replace
+    appInfo.applicationVersion = VK_MAKE_API_VERSION(0, 1, 0, 0);  // TODO: replace
     appInfo.pEngineName = "Maple Engine";
     appInfo.engineVersion = VK_MAKE_API_VERSION(0, 1, 0, 0);  // TODO: replace
     appInfo.apiVersion = VK_API_VERSION_1_0;
 
     VkDebugUtilsMessengerCreateInfoEXT debugCreateInfo{};
-    populateDebugMessengerCreateInfo(debugCreateInfo);
+    populateDebugMessengerCreateInfo(debugCreateInfo, vulkanDebugCallback);
 
     VkInstanceCreateInfo createInfo{
         .sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
         .pNext = validationLayers.size() > 0 ? &debugCreateInfo : nullptr,
         .pApplicationInfo = &appInfo,
         .enabledLayerCount = static_cast<uint32_t>(validationLayers.size()),
-        .ppEnabledLayerNames =
-            validationLayers.size() > 0 ? validationLayers.data() : nullptr,
-        .enabledExtensionCount =
-            static_cast<uint32_t>(requiredExtensions.size()),
+        .ppEnabledLayerNames = validationLayers.size() > 0 ? validationLayers.data() : nullptr,
+        .enabledExtensionCount = static_cast<uint32_t>(requiredExtensions.size()),
         .ppEnabledExtensionNames = requiredExtensions.data(),
     };
 
-    if (vkCreateInstance(&createInfo, nullptr, &mVkInstance) != VK_SUCCESS)
-      MAPLE_FATAL("Failed to create vulkan instance");
+    if (vkCreateInstance(&createInfo, nullptr, &mVkInstance) != VK_SUCCESS) MAPLE_FATAL("Failed to create vulkan instance");
   }
 
   void setupDebugCallback() {
     if (validationLayers.size() < 1) return;
 
     VkDebugUtilsMessengerCreateInfoEXT createInfo;
-    populateDebugMessengerCreateInfo(createInfo);
+    populateDebugMessengerCreateInfo(createInfo, vulkanDebugCallback);
 
-    if (CreateDebugUtilsMessengerEXT(mVkInstance, &createInfo, nullptr,
-                                     &mDebugMessenger) != VK_SUCCESS)
+    if (CreateDebugUtilsMessengerEXT(mVkInstance, &createInfo, nullptr, &mDebugMessenger) != VK_SUCCESS)
       MAPLE_FATAL("Failed to create a Vulkan debug messenger");
   }
 
-  void selectPhysicalDevice() {}
+  void selectPhysicalDevice() {
+    std::multimap<int32_t, size_t> candidates;
 
-  void probeInstanceExtensions() {
-    uint32_t numExtensions = 0;
-    vkEnumerateInstanceExtensionProperties(nullptr, &numExtensions, nullptr);
-    mAvailableInstanceExtensions.resize(numExtensions);
-    vkEnumerateInstanceExtensionProperties(nullptr, &numExtensions,
-                                           mAvailableInstanceExtensions.data());
+    for (size_t i = 0; i < mPhysicalDevices.size(); i++) {
+      int32_t score = 0;
 
-    MAPLE_INFO("Available Vulkan instance extensions ({}):", numExtensions);
-    for (const auto& e : mAvailableInstanceExtensions) {
-      MAPLE_INFO("\t{}: {}", e.extensionName, e.specVersion);
+      switch (mPhysicalDevicesData[i].properties.deviceType) {
+        case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU:
+          score += 2000;
+          break;
+        case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU:
+          score += 500;
+          break;
+        case VK_PHYSICAL_DEVICE_TYPE_CPU:
+          score += 50;
+          break;
+      }
+
+      score += mPhysicalDevicesData[i].properties.limits.maxImageDimension2D;
+
+      candidates.insert(std::make_pair(score, i));
+    }
+
+    // TODO: disqualify devices with no graphics queue (maybe compute queue aswell)
+    // TODO: weigh memory heaps, push constants, and maxFramebuffer dimensions
+
+    for (const auto& e : candidates) MAPLE_INFO("\tScore {}: {}", mPhysicalDevicesData[e.second].properties.deviceName, e.first);
+
+    mSelectedDevice = mPhysicalDevices[candidates.rbegin()->second];
+    MAPLE_INFO("Selected Graphics Device {}", mPhysicalDevicesData[candidates.rbegin()->second].properties.deviceName);
+  }
+
+  void probePhysicalDevices() {
+    uint32_t count = 0;
+    vkEnumeratePhysicalDevices(mVkInstance, &count, nullptr);
+    if (count == 0) MAPLE_FATAL("Failed to find graphics device with Vulkan support");
+
+    mPhysicalDevices.resize(count);
+    mPhysicalDevicesData.resize(count);
+    vkEnumeratePhysicalDevices(mVkInstance, &count, mPhysicalDevices.data());
+
+    MAPLE_INFO("Available Vulkan devices ({}):", count);
+    for (size_t i = 0; i < mPhysicalDevices.size(); i++) {
+      mPhysicalDevicesData[i] = GetPhysicalDeviceData(mPhysicalDevices[i]);
+
+      MAPLE_INFO("\t{}: {}", mPhysicalDevicesData[i].properties.deviceName,
+                 vkPhysicalDeviceTypeToString(mPhysicalDevicesData[i].properties.deviceType));
+
+      for (const auto& v : mPhysicalDevicesData[i].queueFamilies) {
+        const auto caps = GetGraphicsQueueCapabilities(v.queueFlags);
+        MAPLE_INFO(
+            "\t\tQueue Family Capabilites (Count: {}): Compute: {} Graphics: {} Optical_flow: {} Protected: {} Sparse_binding: {} "
+            "Transfer: {} Video_decode: {} Video_encode: {}",
+            v.queueCount, caps.Compute, caps.Graphics, caps.Optical_flow, caps.Protected, caps.Sparse_binding, caps.Transfer,
+            caps.Video_decode, caps.Video_encode);
+      }
     }
   }
 
-  void probeInstanceLayers() {
-    uint32_t numLayers = 0;
-    vkEnumerateInstanceLayerProperties(&numLayers, nullptr);
-    mAvailableInstanceLayers.resize(numLayers);
-    vkEnumerateInstanceLayerProperties(&numLayers,
-                                       mAvailableInstanceLayers.data());
+  void probeInstanceExtensions() {
+    uint32_t count = 0;
+    vkEnumerateInstanceExtensionProperties(nullptr, &count, nullptr);
+    mAvailableInstanceExtensions.resize(count);
+    vkEnumerateInstanceExtensionProperties(nullptr, &count, mAvailableInstanceExtensions.data());
 
-    MAPLE_INFO("Available Vulkan instance layers ({}):", numLayers);
-    for (const auto& l : mAvailableInstanceLayers) {
-      MAPLE_INFO("\t{}: {}, {}, ({})", l.layerName, l.specVersion,
-                 l.implementationVersion, l.description);
-    }
+    MAPLE_INFO("Available Vulkan instance extensions ({}):", count);
+    for (const auto& e : mAvailableInstanceExtensions) MAPLE_INFO("\t{}: {}", e.extensionName, e.specVersion);
+  }
+
+  void probeInstanceLayers() {
+    uint32_t count = 0;
+    vkEnumerateInstanceLayerProperties(&count, nullptr);
+    mAvailableInstanceLayers.resize(count);
+    vkEnumerateInstanceLayerProperties(&count, mAvailableInstanceLayers.data());
+
+    MAPLE_INFO("Available Vulkan instance layers ({}):", count);
+    for (const auto& l : mAvailableInstanceLayers)
+      MAPLE_INFO("\t{}: {}, {}, ({})", l.layerName, l.specVersion, l.implementationVersion, l.description);
   }
 };  // namespace maple
 
 Renderer::Renderer() : mPimpl(std::make_unique<Impl>()) {}
 Renderer::~Renderer() {}
-void Renderer::Init(const uint32_t requiredExtensionsCount,
-                    const char* const* requiredExtensions) {
+void Renderer::Init(const uint32_t requiredExtensionsCount, const char* const* requiredExtensions) {
   mPimpl->Init(requiredExtensionsCount, requiredExtensions);
 }
 void Renderer::Destroy() { mPimpl->Destroy(); }
