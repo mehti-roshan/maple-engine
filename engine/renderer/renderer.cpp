@@ -26,6 +26,7 @@ struct Renderer::Impl {
   VkInstance mVkInstance = VK_NULL_HANDLE;
   VkDebugUtilsMessengerEXT mDebugMessenger = VK_NULL_HANDLE;
   size_t mSelectedDeviceIdx = 0;
+  VkDevice mDevice = VK_NULL_HANDLE;
 
   std::vector<VkExtensionProperties> mAvailableInstanceExtensions;
   std::vector<VkLayerProperties> mAvailableInstanceLayers;
@@ -40,13 +41,45 @@ struct Renderer::Impl {
     setupDebugCallback();
     probePhysicalDevices();
     selectPhysicalDevice();
+    createLogicalDevice();
   }
 
   void Destroy() {
     MAPLE_INFO("Cleaning Renderer...");
+    vkDestroyDevice(mDevice, nullptr);
+
     if (validationLayers.size() > 0) DestroyDebugUtilsMessengerEXT(mVkInstance, mDebugMessenger, nullptr);
 
     vkDestroyInstance(mVkInstance, nullptr);
+  }
+
+  void createLogicalDevice() {
+    const auto graphicsQueueIdx = GetGraphicsQueueIdxWithCapability(mPhysicalDevicesData[mSelectedDeviceIdx], GraphicsQueueCapabilityType::GRAPHICS);
+    if (!graphicsQueueIdx.has_value()) MAPLE_FATAL("Failed to find graphics queue family for device");
+
+    // if selecting multiple queues from the graphics queue family, we need to provide a float array to indicate each one's priority (0.0 to 1.0)
+    // currently only using one queue, so this is fine
+    float queuePriority = 1.0f;
+    VkDeviceQueueCreateInfo devQueueInfo{.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+                                         .queueFamilyIndex = static_cast<uint32_t>(graphicsQueueIdx.value()),
+                                         .queueCount = 1,
+                                         .pQueuePriorities = &queuePriority};
+
+    // don't need any advanced or specific graphics features right now (like a geometry shader) so we leave everything empty
+    VkPhysicalDeviceFeatures devFeatsInfo{};
+
+    VkDeviceCreateInfo createInfo{
+        .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+        .queueCreateInfoCount = 1,
+        .pQueueCreateInfos = &devQueueInfo,
+        .enabledLayerCount = static_cast<uint32_t>(validationLayers.size()),
+        .ppEnabledLayerNames = validationLayers.size() > 0 ? validationLayers.data() : nullptr,
+        .enabledExtensionCount = 0,
+        .pEnabledFeatures = &devFeatsInfo,
+    };
+
+    if (vkCreateDevice(mPhysicalDevices[mSelectedDeviceIdx], &createInfo, nullptr, &mDevice) != VK_SUCCESS)
+      MAPLE_FATAL("Failed to create logical device");
   }
 
   void createVulkanInstance(const uint32_t requiredExtensionsCount, const char* const* windowRequiredExtensions) {
@@ -153,8 +186,8 @@ struct Renderer::Impl {
         MAPLE_INFO(
             "\t\tQueue Family Capabilites (Count: {}): Compute: {} Graphics: {} Optical_flow: {} Protected: {} Sparse_binding: {} "
             "Transfer: {} Video_decode: {} Video_encode: {}",
-            v.queueCount, caps.Compute, caps.Graphics, caps.Optical_flow, caps.Protected, caps.Sparse_binding, caps.Transfer,
-            caps.Video_decode, caps.Video_encode);
+            v.queueCount, caps.Compute, caps.Graphics, caps.Optical_flow, caps.Protected, caps.Sparse_binding, caps.Transfer, caps.Video_decode,
+            caps.Video_encode);
       }
     }
   }
@@ -178,6 +211,16 @@ struct Renderer::Impl {
     MAPLE_INFO("Available Vulkan instance layers ({}):", count);
     for (const auto& l : mAvailableInstanceLayers)
       MAPLE_INFO("\t{}: {}, {}, ({})", l.layerName, l.specVersion, l.implementationVersion, l.description);
+  }
+
+  std::optional<VkQueue> getQueueFamilyHandle(GraphicsQueueCapabilityType type) {
+    const auto graphicsQueueIdx = GetGraphicsQueueIdxWithCapability(mPhysicalDevicesData[mSelectedDeviceIdx], type);
+    if (!graphicsQueueIdx.has_value()) return std::nullopt;
+    VkQueue q;
+    // Currently will only use the first queue of the queue family
+    // Later on we could use multiple of them to submit to in parallel for increased performance
+    vkGetDeviceQueue(mDevice, graphicsQueueIdx.value(), 0, &q);
+    return q;
   }
 };  // namespace maple
 

@@ -1,11 +1,25 @@
 #pragma once
 #include <vulkan/vulkan.h>
+
+#include <optional>
+
 #define VK_CASE_STR(x) \
   case x:              \
     return #x
 
 struct GraphicsQueueCapabilities {
   bool Graphics, Compute, Transfer, Sparse_binding, Protected, Video_decode, Video_encode, Optical_flow;
+};
+
+enum class GraphicsQueueCapabilityType : uint8_t {
+  GRAPHICS,
+  COMPUTE,
+  TRANSFER,
+  SPARSE_BINDING,
+  PROTECTED,
+  VIDEO_DECODE,
+  VIDEO_ENCODE,
+  OPTICAL_FLOW,
 };
 
 GraphicsQueueCapabilities GetGraphicsQueueCapabilities(VkQueueFlags flags) {
@@ -26,6 +40,31 @@ struct PhysicalDeviceData {
   VkPhysicalDeviceFeatures features;
   std::vector<VkQueueFamilyProperties> queueFamilies;
 };
+
+std::optional<uint32_t> GetGraphicsQueueIdxWithCapability(const PhysicalDeviceData& d, GraphicsQueueCapabilityType c) {
+  for (uint32_t i = 0; i < d.queueFamilies.size(); i++) {
+    const auto caps = GetGraphicsQueueCapabilities(d.queueFamilies[i].queueFlags);
+    switch (c) {
+      case GraphicsQueueCapabilityType::GRAPHICS:
+        if (caps.Graphics) return i;
+      case GraphicsQueueCapabilityType::COMPUTE:
+        if (caps.Compute) return i;
+      case GraphicsQueueCapabilityType::TRANSFER:
+        if (caps.Transfer) return i;
+      case GraphicsQueueCapabilityType::SPARSE_BINDING:
+        if (caps.Sparse_binding) return i;
+      case GraphicsQueueCapabilityType::PROTECTED:
+        if (caps.Protected) return i;
+      case GraphicsQueueCapabilityType::VIDEO_DECODE:
+        if (caps.Video_decode) return i;
+      case GraphicsQueueCapabilityType::VIDEO_ENCODE:
+        if (caps.Video_encode) return i;
+      case GraphicsQueueCapabilityType::OPTICAL_FLOW:
+        if (caps.Optical_flow) return i;
+    }
+  }
+  return std::nullopt;
+}
 
 PhysicalDeviceData GetPhysicalDeviceData(VkPhysicalDevice dev) {
   PhysicalDeviceData data{};
