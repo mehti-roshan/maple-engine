@@ -118,7 +118,7 @@ struct Renderer::Impl {
           break;
       }
 
-      score += mPhysicalDevicesData[i].properties.limits.maxImageDimension2D;
+      score += mPhysicalDevicesData[i].properties.limits.maxImageDimension2D / 100;
 
       candidates.insert(std::make_pair(score, i));
     }
