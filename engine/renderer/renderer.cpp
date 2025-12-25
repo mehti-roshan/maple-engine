@@ -23,19 +23,25 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL vulkanDebugCallback(VkDebugUtilsMessageSev
 namespace maple {
 
 struct Renderer::Impl {
-  VkInstance mVkInstance = VK_NULL_HANDLE;
+  VkInstance mInstance = VK_NULL_HANDLE;
   VkDebugUtilsMessengerEXT mDebugMessenger = VK_NULL_HANDLE;
+  VkSurfaceKHR mSurface = VK_NULL_HANDLE;
   size_t mSelectedDeviceIdx = 0;
   VkDevice mDevice = VK_NULL_HANDLE;
-  VkSurfaceKHR mVkSurface = VK_NULL_HANDLE;
 
   std::vector<VkExtensionProperties> mAvailableInstanceExtensions;
   std::vector<VkLayerProperties> mAvailableInstanceLayers;
-  std::vector<VkPhysicalDevice> mPhysicalDevices;
-  std::vector<PhysicalDeviceData> mPhysicalDevicesData;
 
-  struct QueueIndices { uint32_t Graphics, Present; };
+  std::vector<PhysicalDevice> mPhysicalDevices;
+
+  struct QueueIndices {
+    uint32_t Graphics, Present;
+  };
   QueueIndices mQueueIndices;
+  struct QueueHandles {
+    VkQueue Graphics, Present;
+  };
+  QueueHandles mQueueHandles;
 
   void Init(const std::vector<const char*>& requiredExtensions, std::function<VkSurfaceKHR(VkInstance)> surfaceCreateCallback) {
     MAPLE_INFO("Initializing Renderer...");
@@ -43,44 +49,52 @@ struct Renderer::Impl {
     probeInstanceLayers();
     createVulkanInstance(requiredExtensions);
     setupDebugCallback();
+
+    mSurface = surfaceCreateCallback(mInstance);
+
     probePhysicalDevices();
     selectPhysicalDevice();
     createLogicalDevice();
 
-    mVkSurface = surfaceCreateCallback(mVkInstance);
+    // there may be a slight overhead if the graphics and present queues are different families (synchronization issues, memory transfer
+    // weirdness on some devices). currently will only use the graphics queue to check for present capabilities. correct approach would be
+    // to check that, and if the graphics queue doesn't have present, probe other queue families
+    if (mQueueIndices.Graphics != mQueueIndices.Present)
+      MAPLE_FATAL("Different Graphics and Present queue families, separate families not implemented");
 
-    // there may be a slight overhead if the graphics and present queues are different families (synchronization issues, memory transfer weirdness on some devices)
-    // currently will only use the graphics queue to check for present capabilities
-    // correct approach would be to check that, and if the graphics queue doesn't have present, probe other queue families
-    mQueueIndices.Present = mQueueIndices.Graphics;
-    VkBool32 presentSupported = false;
-    vkGetPhysicalDeviceSurfaceSupportKHR(mPhysicalDevices[mSelectedDeviceIdx], mQueueIndices.Present, mVkSurface, &presentSupported);
-    if (!presentSupported)
-      MAPLE_FATAL("Device cannot present images to window surface");
-    
+    vkGetDeviceQueue(mDevice, mQueueIndices.Graphics, 0, &mQueueHandles.Graphics);
+    vkGetDeviceQueue(mDevice, mQueueIndices.Present, 0, &mQueueHandles.Present);
+
     // createSwapChain
   }
 
   void Destroy() {
     MAPLE_INFO("Cleaning Renderer...");
-    vkDestroySurfaceKHR(mVkInstance, mVkSurface, nullptr);
+    vkDestroySurfaceKHR(mInstance, mSurface, nullptr);
     vkDestroyDevice(mDevice, nullptr);
 
-    if (validationLayers.size() > 0) DestroyDebugUtilsMessengerEXT(mVkInstance, mDebugMessenger, nullptr);
+    if (validationLayers.size() > 0) DestroyDebugUtilsMessengerEXT(mInstance, mDebugMessenger, nullptr);
 
-    vkDestroyInstance(mVkInstance, nullptr);
+    vkDestroyInstance(mInstance, nullptr);
   }
 
   void createLogicalDevice() {
-    const auto graphicsQueueIdx = GetGraphicsQueueIdxWithCapability(mPhysicalDevicesData[mSelectedDeviceIdx], GraphicsQueueCapabilityType::GRAPHICS);
-    if (!graphicsQueueIdx.has_value()) MAPLE_FATAL("Failed to find graphics queue family for device");
-    mQueueIndices.Graphics = graphicsQueueIdx.value();
+    const auto& caps = mPhysicalDevices[mSelectedDeviceIdx].queueFamiliesCapabilities;
+    std::vector<GraphicsQueueCapabilityType> requiredCaps = {GraphicsQueueCapabilityType::GRAPHICS, GraphicsQueueCapabilityType::PRESENT};
 
-    // if selecting multiple queues from the graphics queue family, we need to provide a float array to indicate each one's priority (0.0 to 1.0)
-    // currently only using one queue, so this is fine
+    const auto graphicsFamilyIdx = GetQueueFamilyIdxWithCapability(caps, requiredCaps[0]);
+    if (!graphicsFamilyIdx.has_value()) MAPLE_FATAL("Failed to find graphics queue family for device");
+    mQueueIndices.Graphics = graphicsFamilyIdx.value();
+
+    const auto presentFamilyIdx = GetQueueFamilyIdxWithCapability(caps, requiredCaps[1]);
+    if (!presentFamilyIdx.has_value()) MAPLE_FATAL("Failed to find present queue family for device");
+    mQueueIndices.Present = presentFamilyIdx.value();
+
+    // if selecting multiple queues from the queue family, we need to provide a float array to indicate each one's priority (0.0
+    // to 1.0). currently only using one queue, so this is fine
     float queuePriority = 1.0f;
     VkDeviceQueueCreateInfo devQueueInfo{.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
-                                         .queueFamilyIndex = static_cast<uint32_t>(graphicsQueueIdx.value()),
+                                         .queueFamilyIndex = static_cast<uint32_t>(graphicsFamilyIdx.value()),
                                          .queueCount = 1,
                                          .pQueuePriorities = &queuePriority};
 
@@ -97,7 +111,7 @@ struct Renderer::Impl {
         .pEnabledFeatures = &devFeatsInfo,
     };
 
-    if (vkCreateDevice(mPhysicalDevices[mSelectedDeviceIdx], &createInfo, nullptr, &mDevice) != VK_SUCCESS)
+    if (vkCreateDevice(mPhysicalDevices[mSelectedDeviceIdx].dev, &createInfo, nullptr, &mDevice) != VK_SUCCESS)
       MAPLE_FATAL("Failed to create logical device");
   }
 
@@ -139,7 +153,7 @@ struct Renderer::Impl {
         .ppEnabledExtensionNames = enabledExtensions.data(),
     };
 
-    if (vkCreateInstance(&createInfo, nullptr, &mVkInstance) != VK_SUCCESS) MAPLE_FATAL("Failed to create vulkan instance");
+    if (vkCreateInstance(&createInfo, nullptr, &mInstance) != VK_SUCCESS) MAPLE_FATAL("Failed to create vulkan instance");
   }
 
   void setupDebugCallback() {
@@ -148,7 +162,7 @@ struct Renderer::Impl {
     VkDebugUtilsMessengerCreateInfoEXT createInfo;
     populateDebugMessengerCreateInfo(createInfo, vulkanDebugCallback);
 
-    if (CreateDebugUtilsMessengerEXT(mVkInstance, &createInfo, nullptr, &mDebugMessenger) != VK_SUCCESS)
+    if (CreateDebugUtilsMessengerEXT(mInstance, &createInfo, nullptr, &mDebugMessenger) != VK_SUCCESS)
       MAPLE_FATAL("Failed to create a Vulkan debug messenger");
   }
 
@@ -158,7 +172,7 @@ struct Renderer::Impl {
     for (size_t i = 0; i < mPhysicalDevices.size(); i++) {
       int32_t score = 0;
 
-      switch (mPhysicalDevicesData[i].properties.deviceType) {
+      switch (mPhysicalDevices[i].properties.deviceType) {
         case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU:
           score += 2000;
           break;
@@ -170,7 +184,7 @@ struct Renderer::Impl {
           break;
       }
 
-      score += mPhysicalDevicesData[i].properties.limits.maxImageDimension2D / 100;
+      score += mPhysicalDevices[i].properties.limits.maxImageDimension2D / 100;
 
       candidates.insert(std::make_pair(score, i));
     }
@@ -178,35 +192,28 @@ struct Renderer::Impl {
     // TODO: disqualify devices with no graphics queue (maybe compute queue aswell)
     // TODO: weigh memory heaps, push constants, and maxFramebuffer dimensions
 
-    for (const auto& e : candidates) MAPLE_INFO("\tScore {}: {}", mPhysicalDevicesData[e.second].properties.deviceName, e.first);
+    for (const auto& e : candidates) MAPLE_INFO("\tScore {}: {}", mPhysicalDevices[e.second].properties.deviceName, e.first);
 
     mSelectedDeviceIdx = candidates.rbegin()->second;
-    MAPLE_INFO("Selected Graphics Device {}", mPhysicalDevicesData[mSelectedDeviceIdx].properties.deviceName);
+    MAPLE_INFO("Selected Graphics Device {}", mPhysicalDevices[mSelectedDeviceIdx].properties.deviceName);
   }
 
   void probePhysicalDevices() {
-    uint32_t count = 0;
-    vkEnumeratePhysicalDevices(mVkInstance, &count, nullptr);
-    if (count == 0) MAPLE_FATAL("Failed to find graphics device with Vulkan support");
+    mPhysicalDevices = GetPhysicalDevices(mInstance, mSurface);
 
-    mPhysicalDevices.resize(count);
-    mPhysicalDevicesData.resize(count);
-    vkEnumeratePhysicalDevices(mVkInstance, &count, mPhysicalDevices.data());
+    MAPLE_INFO("Available Vulkan devices ({}):", mPhysicalDevices.size());
+    if (mPhysicalDevices.size() < 1) MAPLE_FATAL("Failed to find graphics device with Vulkan support");
 
-    MAPLE_INFO("Available Vulkan devices ({}):", count);
-    for (size_t i = 0; i < mPhysicalDevices.size(); i++) {
-      mPhysicalDevicesData[i] = GetPhysicalDeviceData(mPhysicalDevices[i]);
+    for (const auto& dev : mPhysicalDevices) {
+      MAPLE_INFO("\t{}: {}", dev.properties.deviceName, vkPhysicalDeviceTypeToString(dev.properties.deviceType));
+      MAPLE_INFO("\tQueue Families ({}):", dev.queueFamiliesCapabilities.size());
 
-      MAPLE_INFO("\t{}: {}", mPhysicalDevicesData[i].properties.deviceName,
-                 vkPhysicalDeviceTypeToString(mPhysicalDevicesData[i].properties.deviceType));
-
-      for (const auto& v : mPhysicalDevicesData[i].queueFamilies) {
-        const auto caps = GetGraphicsQueueCapabilities(v.queueFlags);
+      for (const auto& caps : dev.queueFamiliesCapabilities) {
         MAPLE_INFO(
-            "\t\tQueue Family Capabilites (Count: {}): Compute: {} Graphics: {} Optical_flow: {} Protected: {} Sparse_binding: {} "
+            "\t\tQueue count: {} Compute: {} Graphics: {} Optical_flow: {} Protected: {} Sparse_binding: {} "
             "Transfer: {} Video_decode: {} Video_encode: {}",
-            v.queueCount, caps.Compute, caps.Graphics, caps.Optical_flow, caps.Protected, caps.Sparse_binding, caps.Transfer, caps.Video_decode,
-            caps.Video_encode);
+            caps.QueueCount, caps.Compute, caps.Graphics, caps.Optical_flow, caps.Protected, caps.Sparse_binding, caps.Transfer,
+            caps.Video_decode, caps.Video_encode);
       }
     }
   }
@@ -230,16 +237,6 @@ struct Renderer::Impl {
     MAPLE_INFO("Available Vulkan instance layers ({}):", count);
     for (const auto& l : mAvailableInstanceLayers)
       MAPLE_INFO("\t{}: {}, {}, ({})", l.layerName, l.specVersion, l.implementationVersion, l.description);
-  }
-
-  std::optional<VkQueue> getQueueFamilyHandle(GraphicsQueueCapabilityType type) {
-    const auto graphicsQueueIdx = GetGraphicsQueueIdxWithCapability(mPhysicalDevicesData[mSelectedDeviceIdx], type);
-    if (!graphicsQueueIdx.has_value()) return std::nullopt;
-    VkQueue q;
-    // Currently will only use the first queue of the queue family
-    // Later on we could use multiple of them to submit to in parallel for increased performance
-    vkGetDeviceQueue(mDevice, graphicsQueueIdx.value(), 0, &q);
-    return q;
   }
 };  // namespace maple
 

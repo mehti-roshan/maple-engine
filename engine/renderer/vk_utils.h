@@ -7,8 +7,9 @@
   case x:              \
     return #x
 
-struct GraphicsQueueCapabilities {
-  bool Graphics, Compute, Transfer, Sparse_binding, Protected, Video_decode, Video_encode, Optical_flow;
+struct QueueCapabilities {
+  uint32_t QueueCount;
+  bool Graphics, Compute, Transfer, Sparse_binding, Protected, Video_decode, Video_encode, Optical_flow, Present;
 };
 
 enum class GraphicsQueueCapabilityType : uint8_t {
@@ -23,8 +24,14 @@ enum class GraphicsQueueCapabilityType : uint8_t {
   PRESENT,
 };
 
-GraphicsQueueCapabilities GetGraphicsQueueCapabilities(VkQueueFlags flags) {
-  return GraphicsQueueCapabilities{
+QueueCapabilities GetQueueCapabilities(VkPhysicalDevice dev, VkSurfaceKHR surface, uint32_t queueFamilyIdx,
+                                       VkQueueFamilyProperties queueFamilyProperties) {
+  VkBool32 presentSupport = false;
+  vkGetPhysicalDeviceSurfaceSupportKHR(dev, queueFamilyIdx, surface, &presentSupport);
+
+  const auto flags = queueFamilyProperties.queueFlags;
+  return QueueCapabilities{
+      .QueueCount = queueFamilyProperties.queueCount,
       .Graphics = static_cast<bool>(flags & VK_QUEUE_GRAPHICS_BIT),
       .Compute = static_cast<bool>(flags & VK_QUEUE_COMPUTE_BIT),
       .Transfer = static_cast<bool>(flags & VK_QUEUE_TRANSFER_BIT),
@@ -33,19 +40,24 @@ GraphicsQueueCapabilities GetGraphicsQueueCapabilities(VkQueueFlags flags) {
       .Video_decode = static_cast<bool>(flags & VK_QUEUE_VIDEO_DECODE_BIT_KHR),
       .Video_encode = static_cast<bool>(flags & VK_QUEUE_VIDEO_ENCODE_BIT_KHR),
       .Optical_flow = static_cast<bool>(flags & VK_QUEUE_OPTICAL_FLOW_BIT_NV),
+      .Present = static_cast<bool>(presentSupport),
   };
 }
 
-struct PhysicalDeviceData {
+struct PhysicalDevice {
+  VkPhysicalDevice dev;
   VkPhysicalDeviceProperties properties;
   VkPhysicalDeviceFeatures features;
-  std::vector<VkQueueFamilyProperties> queueFamilies;
+
+  std::vector<VkQueueFamilyProperties> queueFamiliesProperties;
+  std::vector<QueueCapabilities> queueFamiliesCapabilities;
 };
 
-std::optional<uint32_t> GetGraphicsQueueIdxWithCapability(const PhysicalDeviceData& data, GraphicsQueueCapabilityType c) {
-  for (uint32_t i = 0; i < data.queueFamilies.size(); i++) {
-    const auto caps = GetGraphicsQueueCapabilities(data.queueFamilies[i].queueFlags);
-    switch (c) {
+std::optional<size_t> GetQueueFamilyIdxWithCapability(std::vector<QueueCapabilities> familyCapabilities,
+                                                      GraphicsQueueCapabilityType filter) {
+  for (size_t i = 0; i < familyCapabilities.size(); i++) {
+    const auto caps = familyCapabilities[i];
+    switch (filter) {
       case GraphicsQueueCapabilityType::GRAPHICS:
         if (caps.Graphics) return i;
       case GraphicsQueueCapabilityType::COMPUTE:
@@ -62,20 +74,39 @@ std::optional<uint32_t> GetGraphicsQueueIdxWithCapability(const PhysicalDeviceDa
         if (caps.Video_encode) return i;
       case GraphicsQueueCapabilityType::OPTICAL_FLOW:
         if (caps.Optical_flow) return i;
+      case GraphicsQueueCapabilityType::PRESENT:
+        if (caps.Present) return i;
     }
   }
   return std::nullopt;
 }
 
-PhysicalDeviceData GetPhysicalDeviceData(VkPhysicalDevice dev) {
-  PhysicalDeviceData data{};
-  vkGetPhysicalDeviceProperties(dev, &data.properties);
-  vkGetPhysicalDeviceFeatures(dev, &data.features);
-  uint32_t numQueueFamilies = 0;
-  vkGetPhysicalDeviceQueueFamilyProperties(dev, &numQueueFamilies, nullptr);
-  data.queueFamilies.resize(numQueueFamilies);
-  vkGetPhysicalDeviceQueueFamilyProperties(dev, &numQueueFamilies, data.queueFamilies.data());
-  return data;
+std::vector<PhysicalDevice> GetPhysicalDevices(VkInstance instance, VkSurfaceKHR surface) {
+  std::vector<PhysicalDevice> devices;
+
+  uint32_t count = 0;
+  {
+    vkEnumeratePhysicalDevices(instance, &count, nullptr);
+    devices.resize(count);
+    std::vector<VkPhysicalDevice> dev(count);
+    vkEnumeratePhysicalDevices(instance, &count, dev.data());
+    for (size_t i = 0; i < count; i++) devices[i].dev = dev[i];
+  }
+
+  for (size_t i = 0; i < count; i++) {
+    vkGetPhysicalDeviceProperties(devices[i].dev, &devices[i].properties);
+    vkGetPhysicalDeviceFeatures(devices[i].dev, &devices[i].features);
+
+    uint32_t queueFamilyCount = 0;
+    vkGetPhysicalDeviceQueueFamilyProperties(devices[i].dev, &queueFamilyCount, nullptr);
+    devices[i].queueFamiliesProperties.resize(queueFamilyCount);
+    devices[i].queueFamiliesCapabilities.resize(queueFamilyCount);
+    vkGetPhysicalDeviceQueueFamilyProperties(devices[i].dev, &queueFamilyCount, devices[i].queueFamiliesProperties.data());
+    for (size_t j = 0; j < queueFamilyCount; j++)
+      devices[i].queueFamiliesCapabilities[j] = GetQueueCapabilities(devices[i].dev, surface, j, devices[i].queueFamiliesProperties[j]);
+  }
+
+  return devices;
 }
 
 const char* vkPhysicalDeviceTypeToString(VkPhysicalDeviceType type) {
