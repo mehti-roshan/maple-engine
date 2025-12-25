@@ -80,11 +80,13 @@ struct Renderer::Impl {
 
   void Destroy() {
     MAPLE_INFO("Cleaning Renderer...");
-    vkDestroySurfaceKHR(mInstance, mSurface, nullptr);
+    
+    vkDestroySwapchainKHR(mDevice, mSwapChain, nullptr);
     vkDestroyDevice(mDevice, nullptr);
 
-    if (validationLayers.size() > 0) DestroyDebugUtilsMessengerEXT(mInstance, mDebugMessenger, nullptr);
+    vkDestroySurfaceKHR(mInstance, mSurface, nullptr);
 
+    if (!validationLayers.empty()) DestroyDebugUtilsMessengerEXT(mInstance, mDebugMessenger, nullptr);
     vkDestroyInstance(mInstance, nullptr);
   }
 
@@ -269,7 +271,7 @@ struct Renderer::Impl {
     mPhysicalDevices = GetPhysicalDevices(mInstance, mSurface);
 
     MAPLE_INFO("Available Vulkan devices ({}):", mPhysicalDevices.size());
-    if (mPhysicalDevices.size() < 1) MAPLE_FATAL("Failed to find graphics device with Vulkan support");
+    if (mPhysicalDevices.empty()) MAPLE_FATAL("Failed to find graphics device with Vulkan support");
 
     for (const auto& dev : mPhysicalDevices) {
       MAPLE_INFO("\t{}: {}", dev.properties.deviceName, vkPhysicalDeviceTypeToString(dev.properties.deviceType));
