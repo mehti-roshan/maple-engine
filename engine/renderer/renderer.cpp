@@ -4,6 +4,7 @@
 
 #include <map>
 #include <set>
+#include <ranges>
 
 #include "vk_utils.h"
 
@@ -175,21 +176,17 @@ struct Renderer::Impl {
   void selectPhysicalDevice() {
     std::multimap<int32_t, size_t> candidates;
 
-    for (size_t i = 0; i < mPhysicalDevices.size(); i++) {
-      for (auto&& e : mPhysicalDevices[i].extensions) {
-        MAPLE_DEBUG("{}", e.extensionName);
-      }
-
+    for (auto [i, device] : std::views::enumerate(mPhysicalDevices)) {
       std::set<std::string> requiredExtensions(REQUIRED_DEVICE_EXTENSIONS.begin(), REQUIRED_DEVICE_EXTENSIONS.end());
-      for (const auto& e : mPhysicalDevices[i].extensions) requiredExtensions.erase(e.extensionName);
+      for (const auto& e : device.extensions) requiredExtensions.erase(e.extensionName);
       if (!requiredExtensions.empty()) {
-        MAPLE_INFO("Device {} doesn't have required device extensions", mPhysicalDevices[i].properties.deviceName);
+        MAPLE_INFO("Device {} doesn't have required device extensions", device.properties.deviceName);
         continue;
       }
 
       int32_t score = 0;
 
-      switch (mPhysicalDevices[i].properties.deviceType) {
+      switch (device.properties.deviceType) {
         case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU:
           score += 2000;
           break;
@@ -201,7 +198,7 @@ struct Renderer::Impl {
           break;
       }
 
-      score += mPhysicalDevices[i].properties.limits.maxImageDimension2D / 100;
+      score += device.properties.limits.maxImageDimension2D / 100;
 
       candidates.insert(std::make_pair(score, i));
     }

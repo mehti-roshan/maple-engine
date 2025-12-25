@@ -2,10 +2,17 @@
 #include <vulkan/vulkan.h>
 
 #include <optional>
+#include <ranges>
 
 #define VK_CASE_STR(x) \
   case x:              \
     return #x
+
+uint32_t OptimalSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& availableFormats) {
+  for (auto [i, availableFormat] : std::views::enumerate(availableFormats))
+    if (availableFormat.format == VK_FORMAT_B8G8R8A8_SRGB && availableFormat.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) return i;
+  return 0;
+}
 
 struct QueueCapabilities {
   uint32_t QueueCount;
@@ -60,8 +67,7 @@ struct PhysicalDevice {
 
 std::optional<size_t> GetQueueFamilyIdxWithCapability(std::vector<QueueCapabilities> familyCapabilities,
                                                       GraphicsQueueCapabilityType filter) {
-  for (size_t i = 0; i < familyCapabilities.size(); i++) {
-    const auto caps = familyCapabilities[i];
+  for (auto [i, caps] : std::views::enumerate(familyCapabilities)) {
     switch (filter) {
       case GraphicsQueueCapabilityType::GRAPHICS:
         if (caps.Graphics) return i;
@@ -89,40 +95,40 @@ std::optional<size_t> GetQueueFamilyIdxWithCapability(std::vector<QueueCapabilit
 std::vector<PhysicalDevice> GetPhysicalDevices(VkInstance instance, VkSurfaceKHR surface) {
   std::vector<PhysicalDevice> devices;
 
-  uint32_t deviceCount = 0;
   {
+    uint32_t deviceCount = 0;
     vkEnumeratePhysicalDevices(instance, &deviceCount, nullptr);
     devices.resize(deviceCount);
     std::vector<VkPhysicalDevice> dev(deviceCount);
     vkEnumeratePhysicalDevices(instance, &deviceCount, dev.data());
-    for (size_t i = 0; i < deviceCount; i++) devices[i].dev = dev[i];
+    for (auto [i, _] : std::views::enumerate(dev)) devices[i].dev = dev[i];
   }
 
-  for (size_t i = 0; i < deviceCount; i++) {
+  for (auto [i, dev] : std::views::enumerate(devices)) {
     uint32_t count = 0;
 
-    vkGetPhysicalDeviceProperties(devices[i].dev, &devices[i].properties);
-    vkGetPhysicalDeviceFeatures(devices[i].dev, &devices[i].features);
+    vkGetPhysicalDeviceProperties(dev.dev, &dev.properties);
+    vkGetPhysicalDeviceFeatures(dev.dev, &dev.features);
 
-    vkEnumerateDeviceExtensionProperties(devices[i].dev, nullptr, &count, nullptr);
-    devices[i].extensions.resize(count);
-    vkEnumerateDeviceExtensionProperties(devices[i].dev, nullptr, &count, devices[i].extensions.data());
+    vkEnumerateDeviceExtensionProperties(dev.dev, nullptr, &count, nullptr);
+    dev.extensions.resize(count);
+    vkEnumerateDeviceExtensionProperties(dev.dev, nullptr, &count, dev.extensions.data());
 
-    vkGetPhysicalDeviceQueueFamilyProperties(devices[i].dev, &count, nullptr);
-    devices[i].queueFamiliesProperties.resize(count);
-    devices[i].queueFamiliesCapabilities.resize(count);
-    vkGetPhysicalDeviceQueueFamilyProperties(devices[i].dev, &count, devices[i].queueFamiliesProperties.data());
+    vkGetPhysicalDeviceQueueFamilyProperties(dev.dev, &count, nullptr);
+    dev.queueFamiliesProperties.resize(count);
+    dev.queueFamiliesCapabilities.resize(count);
+    vkGetPhysicalDeviceQueueFamilyProperties(dev.dev, &count, dev.queueFamiliesProperties.data());
     for (size_t j = 0; j < count; j++)
-      devices[i].queueFamiliesCapabilities[j] = GetQueueCapabilities(devices[i].dev, surface, j, devices[i].queueFamiliesProperties[j]);
+      dev.queueFamiliesCapabilities[j] = GetQueueCapabilities(dev.dev, surface, j, dev.queueFamiliesProperties[j]);
 
-    vkGetPhysicalDeviceSurfaceCapabilitiesKHR(devices[i].dev, surface, &devices[i].surfaceCapabilities);
-    vkGetPhysicalDeviceSurfaceFormatsKHR(devices[i].dev, surface, &count, nullptr);
-    devices[i].surfaceFormats.resize(count);
-    vkGetPhysicalDeviceSurfaceFormatsKHR(devices[i].dev, surface, &count, devices[i].surfaceFormats.data());
+    vkGetPhysicalDeviceSurfaceCapabilitiesKHR(dev.dev, surface, &dev.surfaceCapabilities);
+    vkGetPhysicalDeviceSurfaceFormatsKHR(dev.dev, surface, &count, nullptr);
+    dev.surfaceFormats.resize(count);
+    vkGetPhysicalDeviceSurfaceFormatsKHR(dev.dev, surface, &count, dev.surfaceFormats.data());
 
-    vkGetPhysicalDeviceSurfacePresentModesKHR(devices[i].dev, surface, &count, nullptr);
-    devices[i].presentModes.resize(count);
-    vkGetPhysicalDeviceSurfacePresentModesKHR(devices[i].dev, surface, &count, devices[i].presentModes.data());
+    vkGetPhysicalDeviceSurfacePresentModesKHR(dev.dev, surface, &count, nullptr);
+    dev.presentModes.resize(count);
+    vkGetPhysicalDeviceSurfacePresentModesKHR(dev.dev, surface, &count, dev.presentModes.data());
   }
 
   return devices;
