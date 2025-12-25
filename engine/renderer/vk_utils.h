@@ -9,8 +9,8 @@
     return #x
 
 uint32_t OptimalSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& availableFormats) {
-  for (auto [i, availableFormat] : std::views::enumerate(availableFormats))
-    if (availableFormat.format == VK_FORMAT_B8G8R8A8_SRGB && availableFormat.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) return i;
+  for (auto [i, format] : std::views::enumerate(availableFormats))
+    if (format.format == VK_FORMAT_B8G8R8A8_SRGB && format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) return i;
   return 0;
 }
 
