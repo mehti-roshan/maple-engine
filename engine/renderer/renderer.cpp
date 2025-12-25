@@ -35,6 +35,9 @@ struct Renderer::Impl {
   size_t mSelectedDeviceIdx = 0;
   VkDevice mDevice = VK_NULL_HANDLE;
   VkSwapchainKHR mSwapChain = VK_NULL_HANDLE;
+  std::vector<VkImage> mSwapChainImages;
+  uint32_t mPresentModeIdx, mSurfaceFormatIdx;
+  VkExtent2D mExtent;
 
   std::vector<VkExtensionProperties> mAvailableInstanceExtensions;
   std::vector<VkLayerProperties> mAvailableInstanceLayers;
@@ -76,11 +79,16 @@ struct Renderer::Impl {
     uint32_t framebufferWidth, framebufferHeight;
     getFramebufferSizeCallback(framebufferWidth, framebufferHeight);
     createSwapChain(framebufferWidth, framebufferHeight);
+
+    uint32_t imageCount = 0;
+    vkGetSwapchainImagesKHR(mDevice, mSwapChain, &imageCount, nullptr);
+    mSwapChainImages.resize(imageCount);
+    vkGetSwapchainImagesKHR(mDevice, mSwapChain, &imageCount, mSwapChainImages.data());
   }
 
   void Destroy() {
     MAPLE_INFO("Cleaning Renderer...");
-    
+
     vkDestroySwapchainKHR(mDevice, mSwapChain, nullptr);
     vkDestroyDevice(mDevice, nullptr);
 
@@ -93,9 +101,9 @@ struct Renderer::Impl {
   void createSwapChain(uint32_t framebufferWidth, uint32_t framebufferHeight) {
     const auto& dev = mPhysicalDevices[mSelectedDeviceIdx];
 
-    auto presentModeIdx = ChooseOptimalPresentMode(dev.presentModes);
-    auto surfaceFormatIdx = ChooseOptimalSurfaceFormat(dev.surfaceFormats);
-    auto extent = ChooseOptimalSwapExtent(dev.surfaceCapabilities, framebufferWidth, framebufferHeight);
+    mPresentModeIdx = ChooseOptimalPresentMode(dev.presentModes);
+    mSurfaceFormatIdx = ChooseOptimalSurfaceFormat(dev.surfaceFormats);
+    mExtent = ChooseOptimalSwapExtent(dev.surfaceCapabilities, framebufferWidth, framebufferHeight);
 
     uint32_t imageCount = dev.surfaceCapabilities.minImageCount + 1;
     if (dev.surfaceCapabilities.maxImageCount > 0) imageCount = std::min(imageCount, dev.surfaceCapabilities.maxImageCount);
@@ -104,9 +112,9 @@ struct Renderer::Impl {
         .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
         .surface = mSurface,
         .minImageCount = imageCount,
-        .imageFormat = dev.surfaceFormats[surfaceFormatIdx].format,
-        .imageColorSpace = dev.surfaceFormats[surfaceFormatIdx].colorSpace,
-        .imageExtent = extent,
+        .imageFormat = dev.surfaceFormats[mSurfaceFormatIdx].format,
+        .imageColorSpace = dev.surfaceFormats[mSurfaceFormatIdx].colorSpace,
+        .imageExtent = mExtent,
         .imageArrayLayers = 1,  // always one, unless we're developing 3D applications where each image consists of multiple layers
         .imageUsage =
             VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,  // for now will render directly to swapchain images but later on we'll render to
@@ -115,7 +123,7 @@ struct Renderer::Impl {
                                                   // specifically need the value of those pixels, so enable it for better performance
         .preTransform = dev.surfaceCapabilities.currentTransform,
         .compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
-        .presentMode = dev.presentModes[presentModeIdx],
+        .presentMode = dev.presentModes[mPresentModeIdx],
         .clipped = VK_TRUE,  // means we don't care about pixels that are obscured (for example behind another window). we don't
         .oldSwapchain = VK_NULL_HANDLE,
     };
