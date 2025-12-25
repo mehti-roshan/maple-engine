@@ -112,7 +112,8 @@ struct Renderer::Impl {
         .pQueueCreateInfos = &devQueueInfo,
         .enabledLayerCount = static_cast<uint32_t>(validationLayers.size()),
         .ppEnabledLayerNames = validationLayers.size() > 0 ? validationLayers.data() : nullptr,
-        .enabledExtensionCount = 0,
+        .enabledExtensionCount = REQUIRED_DEVICE_EXTENSIONS.size(),
+        .ppEnabledExtensionNames = REQUIRED_DEVICE_EXTENSIONS.data(),
         .pEnabledFeatures = &devFeatsInfo,
     };
 
