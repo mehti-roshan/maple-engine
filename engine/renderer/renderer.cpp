@@ -34,6 +34,9 @@ struct Renderer::Impl {
   std::vector<VkPhysicalDevice> mPhysicalDevices;
   std::vector<PhysicalDeviceData> mPhysicalDevicesData;
 
+  struct QueueIndices { uint32_t Graphics, Present; };
+  QueueIndices mQueueIndices;
+
   void Init(const std::vector<const char*>& requiredExtensions, std::function<VkSurfaceKHR(VkInstance)> surfaceCreateCallback) {
     MAPLE_INFO("Initializing Renderer...");
     probeInstanceExtensions();
@@ -46,8 +49,12 @@ struct Renderer::Impl {
 
     mVkSurface = surfaceCreateCallback(mVkInstance);
 
+    // there may be a slight overhead if the graphics and present queues are different families (synchronization issues, memory transfer weirdness on some devices)
+    // currently will only use the graphics queue to check for present capabilities
+    // correct approach would be to check that, and if the graphics queue doesn't have present, probe other queue families
+    mQueueIndices.Present = mQueueIndices.Graphics;
     VkBool32 presentSupported = false;
-    vkGetPhysicalDeviceSurfaceSupportKHR(mPhysicalDevices[mSelectedDeviceIdx], GetGraphicsQueueIdxWithCapability(mPhysicalDevicesData[mSelectedDeviceIdx], GraphicsQueueCapabilityType::GRAPHICS).value(), mVkSurface, &presentSupported);
+    vkGetPhysicalDeviceSurfaceSupportKHR(mPhysicalDevices[mSelectedDeviceIdx], mQueueIndices.Present, mVkSurface, &presentSupported);
     if (!presentSupported)
       MAPLE_FATAL("Device cannot present images to window surface");
     
@@ -67,6 +74,7 @@ struct Renderer::Impl {
   void createLogicalDevice() {
     const auto graphicsQueueIdx = GetGraphicsQueueIdxWithCapability(mPhysicalDevicesData[mSelectedDeviceIdx], GraphicsQueueCapabilityType::GRAPHICS);
     if (!graphicsQueueIdx.has_value()) MAPLE_FATAL("Failed to find graphics queue family for device");
+    mQueueIndices.Graphics = graphicsQueueIdx.value();
 
     // if selecting multiple queues from the graphics queue family, we need to provide a float array to indicate each one's priority (0.0 to 1.0)
     // currently only using one queue, so this is fine
