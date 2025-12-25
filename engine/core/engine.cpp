@@ -27,11 +27,14 @@ struct Engine::Impl {
     uint32_t count = 0;
     const char** exts = glfwGetRequiredInstanceExtensions(&count);
     std::vector<const char*> requiredGlfwExtensions(exts, exts + count);
-    mRenderer.Init(requiredGlfwExtensions, [&](VkInstance instance) {
-      VkSurfaceKHR surface = VK_NULL_HANDLE;
-      if (glfwCreateWindowSurface(instance, mWindow, nullptr, &surface) != VK_SUCCESS) MAPLE_FATAL("Failed to create window surface");
-      return surface;
-    });
+    mRenderer.Init(
+        requiredGlfwExtensions,
+        [&](VkInstance instance) {
+          VkSurfaceKHR surface = VK_NULL_HANDLE;
+          if (glfwCreateWindowSurface(instance, mWindow, nullptr, &surface) != VK_SUCCESS) MAPLE_FATAL("Failed to create window surface");
+          return surface;
+        },
+        [&](uint32_t& width, uint32_t& height) { glfwGetFramebufferSize(mWindow, (int32_t*)&width, (int32_t*)&height); });
   }
 
   void Run() {

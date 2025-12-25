@@ -3,8 +3,8 @@
 #include <vulkan/vulkan.h>
 
 #include <map>
-#include <set>
 #include <ranges>
+#include <set>
 
 #include "vk_utils.h"
 
@@ -34,6 +34,7 @@ struct Renderer::Impl {
   VkSurfaceKHR mSurface = VK_NULL_HANDLE;
   size_t mSelectedDeviceIdx = 0;
   VkDevice mDevice = VK_NULL_HANDLE;
+  VkSwapchainKHR mSwapChain = VK_NULL_HANDLE;
 
   std::vector<VkExtensionProperties> mAvailableInstanceExtensions;
   std::vector<VkLayerProperties> mAvailableInstanceLayers;
@@ -49,7 +50,8 @@ struct Renderer::Impl {
   };
   QueueHandles mQueueHandles;
 
-  void Init(const std::vector<const char*>& requiredExtensions, std::function<VkSurfaceKHR(VkInstance)> surfaceCreateCallback) {
+  void Init(const std::vector<const char*>& requiredExtensions, SurfaceCreateCallback surfaceCreateCallback,
+            GetFramebufferSizeCallback getFramebufferSizeCallback) {
     MAPLE_INFO("Initializing Renderer...");
     probeInstanceExtensions();
     probeInstanceLayers();
@@ -71,7 +73,9 @@ struct Renderer::Impl {
     vkGetDeviceQueue(mDevice, mQueueIndices.Graphics, 0, &mQueueHandles.Graphics);
     vkGetDeviceQueue(mDevice, mQueueIndices.Present, 0, &mQueueHandles.Present);
 
-    // createSwapChain
+    uint32_t framebufferWidth, framebufferHeight;
+    getFramebufferSizeCallback(framebufferWidth, framebufferHeight);
+    createSwapChain(framebufferWidth, framebufferHeight);
   }
 
   void Destroy() {
@@ -82,6 +86,48 @@ struct Renderer::Impl {
     if (validationLayers.size() > 0) DestroyDebugUtilsMessengerEXT(mInstance, mDebugMessenger, nullptr);
 
     vkDestroyInstance(mInstance, nullptr);
+  }
+
+  void createSwapChain(uint32_t framebufferWidth, uint32_t framebufferHeight) {
+    const auto& dev = mPhysicalDevices[mSelectedDeviceIdx];
+
+    auto presentModeIdx = ChooseOptimalPresentMode(dev.presentModes);
+    auto surfaceFormatIdx = ChooseOptimalSurfaceFormat(dev.surfaceFormats);
+    auto extent = ChooseOptimalSwapExtent(dev.surfaceCapabilities, framebufferWidth, framebufferHeight);
+
+    uint32_t imageCount = dev.surfaceCapabilities.minImageCount + 1;
+    if (dev.surfaceCapabilities.maxImageCount > 0) imageCount = std::min(imageCount, dev.surfaceCapabilities.maxImageCount);
+
+    VkSwapchainCreateInfoKHR createInfo{
+        .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
+        .surface = mSurface,
+        .minImageCount = imageCount,
+        .imageFormat = dev.surfaceFormats[surfaceFormatIdx].format,
+        .imageColorSpace = dev.surfaceFormats[surfaceFormatIdx].colorSpace,
+        .imageExtent = extent,
+        .imageArrayLayers = 1,  // always one, unless we're developing 3D applications where each image consists of multiple layers
+        .imageUsage =
+            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,  // for now will render directly to swapchain images but later on we'll render to
+                                                  // another image for post processing. in that case,
+                                                  // VK_IMAGE_USAGE_TRANSFER_DST_BIT is the more ideal option.
+                                                  // specifically need the value of those pixels, so enable it for better performance
+        .preTransform = dev.surfaceCapabilities.currentTransform,
+        .compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
+        .presentMode = dev.presentModes[presentModeIdx],
+        .clipped = VK_TRUE,  // means we don't care about pixels that are obscured (for example behind another window). we don't
+        .oldSwapchain = VK_NULL_HANDLE,
+    };
+
+    uint32_t queueFamilyIndices[] = {mQueueIndices.Graphics, mQueueIndices.Present};
+    if (mQueueIndices.Graphics != mQueueIndices.Present) {
+      createInfo.imageSharingMode = VK_SHARING_MODE_CONCURRENT;
+      createInfo.queueFamilyIndexCount = 2;
+      createInfo.pQueueFamilyIndices = queueFamilyIndices;
+    } else {
+      createInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    }
+
+    if (vkCreateSwapchainKHR(mDevice, &createInfo, nullptr, &mSwapChain) != VK_SUCCESS) MAPLE_FATAL("Failed to create swapchain");
   }
 
   void createLogicalDevice() {
@@ -113,7 +159,7 @@ struct Renderer::Impl {
         .pQueueCreateInfos = &devQueueInfo,
         .enabledLayerCount = static_cast<uint32_t>(validationLayers.size()),
         .ppEnabledLayerNames = validationLayers.size() > 0 ? validationLayers.data() : nullptr,
-        .enabledExtensionCount = REQUIRED_DEVICE_EXTENSIONS.size(),
+        .enabledExtensionCount = static_cast<uint32_t>(REQUIRED_DEVICE_EXTENSIONS.size()),
         .ppEnabledExtensionNames = REQUIRED_DEVICE_EXTENSIONS.data(),
         .pEnabledFeatures = &devFeatsInfo,
     };
@@ -181,6 +227,11 @@ struct Renderer::Impl {
       for (const auto& e : device.extensions) requiredExtensions.erase(e.extensionName);
       if (!requiredExtensions.empty()) {
         MAPLE_INFO("Device {} doesn't have required device extensions", device.properties.deviceName);
+        continue;
+      }
+
+      if (device.presentModes.empty() || device.surfaceFormats.empty()) {
+        MAPLE_INFO("Device {} doesn't have required surface features", device.properties.deviceName);
         continue;
       }
 
@@ -258,8 +309,9 @@ struct Renderer::Impl {
 
 Renderer::Renderer() : mPimpl(std::make_unique<Impl>()) {}
 Renderer::~Renderer() {}
-void Renderer::Init(const std::vector<const char*>& requiredExtensions, std::function<VkSurfaceKHR(VkInstance)> surfaceCreateCallback) {
-  mPimpl->Init(requiredExtensions, surfaceCreateCallback);
+void Renderer::Init(const std::vector<const char*>& requiredExtensions, SurfaceCreateCallback surfaceCreateCallback,
+                    GetFramebufferSizeCallback getFramebufferSizeCallback) {
+  mPimpl->Init(requiredExtensions, surfaceCreateCallback, getFramebufferSizeCallback);
 }
 void Renderer::Destroy() { mPimpl->Destroy(); }
 

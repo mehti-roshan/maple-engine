@@ -8,7 +8,28 @@
   case x:              \
     return #x
 
-uint32_t OptimalSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& availableFormats) {
+VkExtent2D ChooseOptimalSwapExtent(const VkSurfaceCapabilitiesKHR& capabilities, uint32_t framebufferWidth, uint32_t framebufferHeight) {
+  if (capabilities.currentExtent.width != std::numeric_limits<uint32_t>::max()) return capabilities.currentExtent;
+
+  return VkExtent2D{
+      .width = std::clamp(framebufferWidth, capabilities.minImageExtent.width, capabilities.maxImageExtent.width),
+      .height = std::clamp(framebufferHeight, capabilities.minImageExtent.height, capabilities.maxImageExtent.height),
+  };
+}
+
+uint32_t ChooseOptimalPresentMode(const std::vector<VkPresentModeKHR>& presentModes) {
+  uint32_t fifoIdx;
+
+  for (auto [i, mode] : std::views::enumerate(presentModes)) {
+    if (mode == VK_PRESENT_MODE_MAILBOX_KHR) return i;
+    if (mode == VK_PRESENT_MODE_FIFO_KHR) fifoIdx = i;
+  }
+
+  // VK_PRESENT_MODE_FIFO_KHR above is guaranteed by the spec to be available (hopefully :))
+  return fifoIdx;
+}
+
+uint32_t ChooseOptimalSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& availableFormats) {
   for (auto [i, format] : std::views::enumerate(availableFormats))
     if (format.format == VK_FORMAT_B8G8R8A8_SRGB && format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) return i;
   return 0;
