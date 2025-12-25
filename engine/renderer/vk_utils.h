@@ -48,6 +48,7 @@ struct PhysicalDevice {
   VkPhysicalDevice dev;
   VkPhysicalDeviceProperties properties;
   VkPhysicalDeviceFeatures features;
+  std::vector<VkExtensionProperties> extensions;
 
   std::vector<VkQueueFamilyProperties> queueFamiliesProperties;
   std::vector<QueueCapabilities> queueFamiliesCapabilities;
@@ -96,6 +97,11 @@ std::vector<PhysicalDevice> GetPhysicalDevices(VkInstance instance, VkSurfaceKHR
   for (size_t i = 0; i < count; i++) {
     vkGetPhysicalDeviceProperties(devices[i].dev, &devices[i].properties);
     vkGetPhysicalDeviceFeatures(devices[i].dev, &devices[i].features);
+
+    uint32_t extensionCount = 0;
+    vkEnumerateDeviceExtensionProperties(devices[i].dev, nullptr, &extensionCount, nullptr);
+    devices[i].extensions.resize(extensionCount);
+    vkEnumerateDeviceExtensionProperties(devices[i].dev, nullptr, &extensionCount, devices[i].extensions.data());
 
     uint32_t queueFamilyCount = 0;
     vkGetPhysicalDeviceQueueFamilyProperties(devices[i].dev, &queueFamilyCount, nullptr);

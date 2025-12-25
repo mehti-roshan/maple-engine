@@ -3,6 +3,7 @@
 #include <vulkan/vulkan.h>
 
 #include <map>
+#include <set>
 
 #include "vk_utils.h"
 
@@ -10,6 +11,10 @@ const std::vector<const char*> validationLayers = {
 #ifndef NDEBUG
     "VK_LAYER_KHRONOS_validation"
 #endif
+};
+
+const std::vector<const char*> REQUIRED_DEVICE_EXTENSIONS = {
+    VK_KHR_SWAPCHAIN_EXTENSION_NAME,
 };
 
 static VKAPI_ATTR VkBool32 VKAPI_CALL vulkanDebugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
@@ -170,6 +175,17 @@ struct Renderer::Impl {
     std::multimap<int32_t, size_t> candidates;
 
     for (size_t i = 0; i < mPhysicalDevices.size(); i++) {
+      for (auto&& e : mPhysicalDevices[i].extensions) {
+        MAPLE_DEBUG("{}", e.extensionName);
+      }
+
+      std::set<std::string> requiredExtensions(REQUIRED_DEVICE_EXTENSIONS.begin(), REQUIRED_DEVICE_EXTENSIONS.end());
+      for (const auto& e : mPhysicalDevices[i].extensions) requiredExtensions.erase(e.extensionName);
+      if (!requiredExtensions.empty()) {
+        MAPLE_INFO("Device {} doesn't have required device extensions", mPhysicalDevices[i].properties.deviceName);
+        continue;
+      }
+
       int32_t score = 0;
 
       switch (mPhysicalDevices[i].properties.deviceType) {
@@ -191,6 +207,8 @@ struct Renderer::Impl {
 
     // TODO: disqualify devices with no graphics queue (maybe compute queue aswell)
     // TODO: weigh memory heaps, push constants, and maxFramebuffer dimensions
+
+    if (candidates.size() < 1) MAPLE_FATAL("Failed to find any appropriate device");
 
     for (const auto& e : candidates) MAPLE_INFO("\tScore {}: {}", mPhysicalDevices[e.second].properties.deviceName, e.first);
 
