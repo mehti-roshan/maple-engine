@@ -24,9 +24,10 @@ struct Engine::Impl {
     MAPLE_INFO("Initializing...");
 
     initGLFW();
-    uint32_t glfwRequiredExtensionsCount = 0;
-    const char** glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwRequiredExtensionsCount);
-    mRenderer.Init(glfwRequiredExtensionsCount, glfwExtensions, [&](VkInstance instance) {
+    uint32_t count = 0;
+    const char** exts = glfwGetRequiredInstanceExtensions(&count);
+    std::vector<const char*> requiredGlfwExtensions(exts, exts + count);
+    mRenderer.Init(requiredGlfwExtensions, [&](VkInstance instance) {
       VkSurfaceKHR surface = VK_NULL_HANDLE;
       if (glfwCreateWindowSurface(instance, mWindow, nullptr, &surface) != VK_SUCCESS) MAPLE_FATAL("Failed to create window surface");
       return surface;

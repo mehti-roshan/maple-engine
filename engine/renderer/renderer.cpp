@@ -34,11 +34,11 @@ struct Renderer::Impl {
   std::vector<VkPhysicalDevice> mPhysicalDevices;
   std::vector<PhysicalDeviceData> mPhysicalDevicesData;
 
-  void Init(const uint32_t requiredExtensionsCount, const char* const* requiredExtensions, std::function<VkSurfaceKHR(VkInstance)> surfaceCreateCallback) {
+  void Init(const std::vector<const char*>& requiredExtensions, std::function<VkSurfaceKHR(VkInstance)> surfaceCreateCallback) {
     MAPLE_INFO("Initializing Renderer...");
     probeInstanceExtensions();
     probeInstanceLayers();
-    createVulkanInstance(requiredExtensionsCount, requiredExtensions);
+    createVulkanInstance(requiredExtensions);
     setupDebugCallback();
     probePhysicalDevices();
     selectPhysicalDevice();
@@ -93,7 +93,7 @@ struct Renderer::Impl {
       MAPLE_FATAL("Failed to create logical device");
   }
 
-  void createVulkanInstance(const uint32_t requiredExtensionsCount, const char* const* windowRequiredExtensions) {
+  void createVulkanInstance(const std::vector<const char*>& requiredExtensions) {
     for (const char* layerName : validationLayers) {
       bool found = false;
 
@@ -107,8 +107,8 @@ struct Renderer::Impl {
       if (!found) MAPLE_FATAL("Failed to find required Vulkan instance layer \"{}\"", layerName);
     }
 
-    std::vector<const char*> requiredExtensions(windowRequiredExtensions, windowRequiredExtensions + requiredExtensionsCount);
-    if (validationLayers.size() > 0) requiredExtensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+    std::vector<const char*> enabledExtensions = requiredExtensions;
+    if (validationLayers.size() > 0) enabledExtensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
 
     VkApplicationInfo appInfo{};
     appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
@@ -127,8 +127,8 @@ struct Renderer::Impl {
         .pApplicationInfo = &appInfo,
         .enabledLayerCount = static_cast<uint32_t>(validationLayers.size()),
         .ppEnabledLayerNames = validationLayers.size() > 0 ? validationLayers.data() : nullptr,
-        .enabledExtensionCount = static_cast<uint32_t>(requiredExtensions.size()),
-        .ppEnabledExtensionNames = requiredExtensions.data(),
+        .enabledExtensionCount = static_cast<uint32_t>(enabledExtensions.size()),
+        .ppEnabledExtensionNames = enabledExtensions.data(),
     };
 
     if (vkCreateInstance(&createInfo, nullptr, &mVkInstance) != VK_SUCCESS) MAPLE_FATAL("Failed to create vulkan instance");
@@ -237,8 +237,8 @@ struct Renderer::Impl {
 
 Renderer::Renderer() : mPimpl(std::make_unique<Impl>()) {}
 Renderer::~Renderer() {}
-void Renderer::Init(const uint32_t requiredExtensionsCount, const char* const* requiredExtensions, std::function<VkSurfaceKHR(VkInstance)> surfaceCreateCallback) {
-  mPimpl->Init(requiredExtensionsCount, requiredExtensions, surfaceCreateCallback);
+void Renderer::Init(const std::vector<const char*>& requiredExtensions, std::function<VkSurfaceKHR(VkInstance)> surfaceCreateCallback) {
+  mPimpl->Init(requiredExtensions, surfaceCreateCallback);
 }
 void Renderer::Destroy() { mPimpl->Destroy(); }
 

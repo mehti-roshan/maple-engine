@@ -1,6 +1,7 @@
 #pragma once
 #include <memory>
 #include <functional>
+#include <vector>
 
 typedef struct VkInstance_T* VkInstance;
 typedef struct VkSurfaceKHR_T* VkSurfaceKHR;
@@ -15,7 +16,7 @@ class Renderer {
   Renderer();
   ~Renderer();
 
-  void Init(const uint32_t requiredExtensionsCount, const char* const* requiredExtensions, SurfaceCreateCallback surfaceCreateCallback);
+  void Init(const std::vector<const char*>& requiredExtensions, SurfaceCreateCallback surfaceCreateCallback);
   void Destroy();
 
  private:
