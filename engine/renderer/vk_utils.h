@@ -20,6 +20,7 @@ enum class GraphicsQueueCapabilityType : uint8_t {
   VIDEO_DECODE,
   VIDEO_ENCODE,
   OPTICAL_FLOW,
+  PRESENT,
 };
 
 GraphicsQueueCapabilities GetGraphicsQueueCapabilities(VkQueueFlags flags) {
@@ -41,9 +42,9 @@ struct PhysicalDeviceData {
   std::vector<VkQueueFamilyProperties> queueFamilies;
 };
 
-std::optional<uint32_t> GetGraphicsQueueIdxWithCapability(const PhysicalDeviceData& d, GraphicsQueueCapabilityType c) {
-  for (uint32_t i = 0; i < d.queueFamilies.size(); i++) {
-    const auto caps = GetGraphicsQueueCapabilities(d.queueFamilies[i].queueFlags);
+std::optional<uint32_t> GetGraphicsQueueIdxWithCapability(const PhysicalDeviceData& data, GraphicsQueueCapabilityType c) {
+  for (uint32_t i = 0; i < data.queueFamilies.size(); i++) {
+    const auto caps = GetGraphicsQueueCapabilities(data.queueFamilies[i].queueFlags);
     switch (c) {
       case GraphicsQueueCapabilityType::GRAPHICS:
         if (caps.Graphics) return i;
