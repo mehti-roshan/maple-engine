@@ -53,6 +53,8 @@ struct Renderer::Impl {
   };
   QueueHandles mQueueHandles;
 
+  std::vector<VkImageView> mSwapChainImageViews;
+
   void Init(const std::vector<const char*>& requiredExtensions, SurfaceCreateCallback surfaceCreateCallback,
             GetFramebufferSizeCallback getFramebufferSizeCallback) {
     MAPLE_INFO("Initializing Renderer...");
@@ -84,10 +86,15 @@ struct Renderer::Impl {
     vkGetSwapchainImagesKHR(mDevice, mSwapChain, &imageCount, nullptr);
     mSwapChainImages.resize(imageCount);
     vkGetSwapchainImagesKHR(mDevice, mSwapChain, &imageCount, mSwapChainImages.data());
+
+    createImageViews();
   }
 
   void Destroy() {
     MAPLE_INFO("Cleaning Renderer...");
+
+    for (auto imgView : mSwapChainImageViews)
+      vkDestroyImageView(mDevice, imgView, nullptr);
 
     vkDestroySwapchainKHR(mDevice, mSwapChain, nullptr);
     vkDestroyDevice(mDevice, nullptr);
@@ -96,6 +103,34 @@ struct Renderer::Impl {
 
     if (!validationLayers.empty()) DestroyDebugUtilsMessengerEXT(mInstance, mDebugMessenger, nullptr);
     vkDestroyInstance(mInstance, nullptr);
+  }
+
+  void createImageViews() {
+    mSwapChainImageViews.resize(mSwapChainImages.size());
+    for (auto [i, v] : std::views::enumerate(mSwapChainImageViews)) {
+      VkImageViewCreateInfo createInfo{
+        .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+        .image = mSwapChainImages[i],
+        .viewType = VK_IMAGE_VIEW_TYPE_2D,
+        .format = mPhysicalDevices[mSelectedDeviceIdx].surfaceFormats[mSurfaceFormatIdx].format,
+        .components = {
+          .r = VK_COMPONENT_SWIZZLE_IDENTITY,
+          .g = VK_COMPONENT_SWIZZLE_IDENTITY,
+          .b = VK_COMPONENT_SWIZZLE_IDENTITY,
+          .a = VK_COMPONENT_SWIZZLE_IDENTITY,
+        },
+        .subresourceRange = {
+          .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+          .baseMipLevel = 0,
+          .levelCount = 1,
+          .baseArrayLayer = 0,
+          .layerCount = 1,
+        },
+      };
+
+      if (vkCreateImageView(mDevice, &createInfo, nullptr, &v) != VK_SUCCESS)
+        MAPLE_FATAL("Failed to create image view");
+    }
   }
 
   void createSwapChain(uint32_t framebufferWidth, uint32_t framebufferHeight) {
