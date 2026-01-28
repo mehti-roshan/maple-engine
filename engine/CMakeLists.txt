@@ -2,6 +2,7 @@ add_library(maple_engine STATIC core/engine.cpp)
 
 add_subdirectory(logging)
 add_subdirectory(renderer)
+add_subdirectory(file)
 
 target_include_directories(maple_engine PUBLIC ${CMAKE_SOURCE_DIR})
 
