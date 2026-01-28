@@ -79,7 +79,6 @@ struct Renderer::Impl {
     vkGetDeviceQueue(mDevice, mQueueIndices.Present, 0, &mQueueHandles.Present);
 
     createSwapChain(framebufferSizeCallback);
-
     createImageViews();
   }
 
