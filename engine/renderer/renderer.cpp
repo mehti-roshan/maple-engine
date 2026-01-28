@@ -56,7 +56,7 @@ struct Renderer::Impl {
   std::vector<VkImageView> mSwapChainImageViews;
 
   void Init(const std::vector<const char*>& requiredExtensions, SurfaceCreateCallback surfaceCreateCallback,
-            GetFramebufferSizeCallback getFramebufferSizeCallback) {
+            FramebufferSizeCallback framebufferSizeCallback) {
     MAPLE_INFO("Initializing Renderer...");
     probeInstanceExtensions();
     probeInstanceLayers();
@@ -78,14 +78,7 @@ struct Renderer::Impl {
     vkGetDeviceQueue(mDevice, mQueueIndices.Graphics, 0, &mQueueHandles.Graphics);
     vkGetDeviceQueue(mDevice, mQueueIndices.Present, 0, &mQueueHandles.Present);
 
-    uint32_t framebufferWidth, framebufferHeight;
-    getFramebufferSizeCallback(framebufferWidth, framebufferHeight);
-    createSwapChain(framebufferWidth, framebufferHeight);
-
-    uint32_t imageCount = 0;
-    vkGetSwapchainImagesKHR(mDevice, mSwapChain, &imageCount, nullptr);
-    mSwapChainImages.resize(imageCount);
-    vkGetSwapchainImagesKHR(mDevice, mSwapChain, &imageCount, mSwapChainImages.data());
+    createSwapChain(framebufferSizeCallback);
 
     createImageViews();
   }
@@ -106,7 +99,13 @@ struct Renderer::Impl {
   }
 
   void createImageViews() {
-    mSwapChainImageViews.resize(mSwapChainImages.size());
+    uint32_t imageCount = 0;
+    vkGetSwapchainImagesKHR(mDevice, mSwapChain, &imageCount, nullptr);
+    mSwapChainImages.resize(imageCount);
+    vkGetSwapchainImagesKHR(mDevice, mSwapChain, &imageCount, mSwapChainImages.data());
+
+    mSwapChainImageViews.resize(imageCount);
+    
     for (auto [i, v] : std::views::enumerate(mSwapChainImageViews)) {
       VkImageViewCreateInfo createInfo{
         .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
@@ -133,7 +132,10 @@ struct Renderer::Impl {
     }
   }
 
-  void createSwapChain(uint32_t framebufferWidth, uint32_t framebufferHeight) {
+  void createSwapChain(FramebufferSizeCallback framebufferSizeCallback) {
+    uint32_t framebufferWidth, framebufferHeight;
+    framebufferSizeCallback(framebufferWidth, framebufferHeight);
+
     const auto& dev = mPhysicalDevices[mSelectedDeviceIdx];
 
     mPresentModeIdx = ChooseOptimalPresentMode(dev.presentModes);
@@ -355,8 +357,8 @@ struct Renderer::Impl {
 Renderer::Renderer() : mPimpl(std::make_unique<Impl>()) {}
 Renderer::~Renderer() {}
 void Renderer::Init(const std::vector<const char*>& requiredExtensions, SurfaceCreateCallback surfaceCreateCallback,
-                    GetFramebufferSizeCallback getFramebufferSizeCallback) {
-  mPimpl->Init(requiredExtensions, surfaceCreateCallback, getFramebufferSizeCallback);
+                    FramebufferSizeCallback framebufferSizeCallback) {
+  mPimpl->Init(requiredExtensions, surfaceCreateCallback, framebufferSizeCallback);
 }
 void Renderer::Destroy() { mPimpl->Destroy(); }
 
