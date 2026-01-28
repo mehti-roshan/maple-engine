@@ -10,14 +10,13 @@
 
 VkShaderModule CreateShaderModule(VkDevice device, const std::vector<char>& code) {
   VkShaderModuleCreateInfo createInfo{
-    .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
-    .codeSize = code.size(),
-    .pCode = reinterpret_cast<const uint32_t*>(code.data()),
+      .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+      .codeSize = code.size(),
+      .pCode = reinterpret_cast<const uint32_t*>(code.data()),
   };
 
   VkShaderModule shaderModule;
-  if (vkCreateShaderModule(device, &createInfo, nullptr, &shaderModule) != VK_SUCCESS)
-    MAPLE_FATAL("Failed to create shader module");
+  if (vkCreateShaderModule(device, &createInfo, nullptr, &shaderModule) != VK_SUCCESS) MAPLE_FATAL("Failed to create shader module");
 
   return shaderModule;
 }
@@ -100,8 +99,7 @@ struct PhysicalDevice {
   std::vector<VkPresentModeKHR> presentModes;
 };
 
-std::optional<size_t> GetQueueFamilyIdxWithCapability(std::vector<QueueCapabilities> familyCapabilities,
-                                                      GraphicsQueueCapabilityType filter) {
+std::optional<size_t> GetQueueFamilyIdxWithCapability(std::vector<QueueCapabilities> familyCapabilities, GraphicsQueueCapabilityType filter) {
   for (auto [i, caps] : std::views::enumerate(familyCapabilities)) {
     switch (filter) {
       case GraphicsQueueCapabilityType::GRAPHICS:
@@ -153,8 +151,7 @@ std::vector<PhysicalDevice> GetPhysicalDevices(VkInstance instance, VkSurfaceKHR
     dev.queueFamiliesProperties.resize(count);
     dev.queueFamiliesCapabilities.resize(count);
     vkGetPhysicalDeviceQueueFamilyProperties(dev.dev, &count, dev.queueFamiliesProperties.data());
-    for (size_t j = 0; j < count; j++)
-      dev.queueFamiliesCapabilities[j] = GetQueueCapabilities(dev.dev, surface, j, dev.queueFamiliesProperties[j]);
+    for (size_t j = 0; j < count; j++) dev.queueFamiliesCapabilities[j] = GetQueueCapabilities(dev.dev, surface, j, dev.queueFamiliesProperties[j]);
 
     vkGetPhysicalDeviceSurfaceCapabilitiesKHR(dev.dev, surface, &dev.surfaceCapabilities);
     vkGetPhysicalDeviceSurfaceFormatsKHR(dev.dev, surface, &count, nullptr);
