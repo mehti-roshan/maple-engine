@@ -1,3 +1,4 @@
+#include <engine/file/file.h>
 #include <engine/logging/log_macros.h>
 #include <engine/renderer/renderer.h>
 #include <vulkan/vulkan.h>
@@ -55,6 +56,11 @@ struct Renderer::Impl {
 
   std::vector<VkImageView> mSwapChainImageViews;
 
+  VkRenderPass mRenderPass;
+  VkShaderModule mVertShader, mFragShader;
+  VkPipelineLayout mPipelineLayout;
+  VkPipeline mPipeline;
+
   void Init(const std::vector<const char*>& requiredExtensions, SurfaceCreateCallback surfaceCreateCallback,
             FramebufferSizeCallback framebufferSizeCallback) {
     MAPLE_INFO("Initializing Renderer...");
@@ -80,13 +86,19 @@ struct Renderer::Impl {
 
     createSwapChain(framebufferSizeCallback);
     createImageViews();
+
+    createRenderPass();
+    createGraphicsPipeline();
   }
 
   void Destroy() {
     MAPLE_INFO("Cleaning Renderer...");
 
-    for (auto imgView : mSwapChainImageViews)
-      vkDestroyImageView(mDevice, imgView, nullptr);
+    vkDestroyPipeline(mDevice, mPipeline, nullptr);
+    vkDestroyPipelineLayout(mDevice, mPipelineLayout, nullptr);
+    vkDestroyRenderPass(mDevice, mRenderPass, nullptr);
+
+    for (auto imgView : mSwapChainImageViews) vkDestroyImageView(mDevice, imgView, nullptr);
 
     vkDestroySwapchainKHR(mDevice, mSwapChain, nullptr);
     vkDestroyDevice(mDevice, nullptr);
@@ -97,6 +109,167 @@ struct Renderer::Impl {
     vkDestroyInstance(mInstance, nullptr);
   }
 
+  void createGraphicsPipeline() {
+    auto vCode = file::ReadFile("assets/shaders/vert.spv");
+    auto fCode = file::ReadFile("assets/shaders/frag.spv");
+
+    auto vertShaderModule = CreateShaderModule(mDevice, vCode);
+    auto fragShaderModule = CreateShaderModule(mDevice, fCode);
+
+    VkPipelineShaderStageCreateInfo vCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+        .stage = VK_SHADER_STAGE_VERTEX_BIT,
+        .module = vertShaderModule,
+        .pName = "main",  // Configurable entry point function name
+    };
+
+    VkPipelineShaderStageCreateInfo fCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+        .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
+        .module = fragShaderModule,
+        .pName = "main",  // Configurable entry point function name
+    };
+
+    std::vector<VkDynamicState> dynamicStates = {
+        VK_DYNAMIC_STATE_VIEWPORT,
+        VK_DYNAMIC_STATE_SCISSOR,
+    };
+
+    VkPipelineDynamicStateCreateInfo dynamicStateCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+        .dynamicStateCount = static_cast<uint32_t>(dynamicStates.size()),
+        .pDynamicStates = dynamicStates.data(),
+    };
+
+    VkPipelineVertexInputStateCreateInfo vertexInputInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+        .vertexBindingDescriptionCount = 0,
+        .vertexAttributeDescriptionCount = 0,
+    };
+
+    VkPipelineInputAssemblyStateCreateInfo inputAssembly{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+        .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+        .primitiveRestartEnable = VK_FALSE,
+    };
+
+    VkViewport viewport{
+        .x = 0.0f,
+        .y = 0.0f,
+        .width = (float)mExtent.width,
+        .height = (float)mExtent.height,
+        .minDepth = 0.0f,
+        .maxDepth = 1.0f,
+    };
+
+    VkRect2D scissor{
+        .offset = {0, 0},
+        .extent = mExtent,
+    };
+
+    VkPipelineViewportStateCreateInfo viewportState{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+        .viewportCount = 1,
+        .pViewports = &viewport,
+        .scissorCount = 1,
+        .pScissors = &scissor,
+    };
+
+    VkPipelineRasterizationStateCreateInfo rasterizer{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+        .depthClampEnable = false,
+        .rasterizerDiscardEnable = false,
+        .polygonMode = VK_POLYGON_MODE_FILL,
+        .cullMode = VK_CULL_MODE_BACK_BIT,
+        .frontFace = VK_FRONT_FACE_CLOCKWISE,
+        .depthBiasEnable = false,
+        .lineWidth = 1.0f,
+    };
+
+    VkPipelineMultisampleStateCreateInfo multisampling{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+        .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
+        .sampleShadingEnable = false,
+    };
+
+    VkPipelineColorBlendAttachmentState colorBlendAttach{
+        .blendEnable = false,
+        .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT,
+    };
+
+    VkPipelineColorBlendStateCreateInfo colorBlending{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+        .logicOpEnable = VK_FALSE,
+        .attachmentCount = 1,
+        .pAttachments = &colorBlendAttach,
+    };
+
+    VkPipelineLayoutCreateInfo pipelineLayoutInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+    };
+
+    if (vkCreatePipelineLayout(mDevice, &pipelineLayoutInfo, nullptr, &mPipelineLayout) != VK_SUCCESS)
+      MAPLE_FATAL("Failed to create pipeline layout");
+
+    VkPipelineShaderStageCreateInfo stages[] = {vCreateInfo, fCreateInfo};
+
+    VkGraphicsPipelineCreateInfo pipelineInfo{
+        .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+        .stageCount = 2,
+        .pStages = stages,
+        .pVertexInputState = &vertexInputInfo,
+        .pInputAssemblyState = &inputAssembly,
+        .pViewportState = &viewportState,
+        .pRasterizationState = &rasterizer,
+        .pMultisampleState = &multisampling,
+        .pDepthStencilState = nullptr,
+        .pColorBlendState = &colorBlending,
+        .pDynamicState = &dynamicStateCreateInfo,
+        .layout = mPipelineLayout,
+        .renderPass = mRenderPass,
+        .subpass = 0,
+    };
+
+    if (vkCreateGraphicsPipelines(mDevice, nullptr, 1, &pipelineInfo, nullptr, &mPipeline) != VK_SUCCESS) MAPLE_FATAL("Failed to create pipeline");
+
+    vkDestroyShaderModule(mDevice, vertShaderModule, nullptr);
+    vkDestroyShaderModule(mDevice, fragShaderModule, nullptr);
+  }
+
+  void createRenderPass() {
+    VkAttachmentDescription colorAttach{
+        .format = mPhysicalDevices[mSelectedDeviceIdx].surfaceFormats[mSurfaceFormatIdx].format,
+        .samples = VK_SAMPLE_COUNT_1_BIT,
+        .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+        .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+        .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+        .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        .finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+    };
+
+    VkAttachmentReference colorAttachRef{
+        .attachment = 0,
+        .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+    };
+
+    VkSubpassDescription subpass{
+        .pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
+        .colorAttachmentCount = 1,
+        .pColorAttachments = &colorAttachRef,
+    };
+
+    VkRenderPassCreateInfo renderPassInfo{
+        .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
+        .attachmentCount = 1,
+        .pAttachments = &colorAttach,
+        .subpassCount = 1,
+        .pSubpasses = &subpass,
+    };
+
+    if (vkCreateRenderPass(mDevice, &renderPassInfo, nullptr, &mRenderPass) != VK_SUCCESS) MAPLE_FATAL("Failed to create render pass");
+  }
+
   void createImageViews() {
     uint32_t imageCount = 0;
     vkGetSwapchainImagesKHR(mDevice, mSwapChain, &imageCount, nullptr);
@@ -104,30 +277,31 @@ struct Renderer::Impl {
     vkGetSwapchainImagesKHR(mDevice, mSwapChain, &imageCount, mSwapChainImages.data());
 
     mSwapChainImageViews.resize(imageCount);
-    
+
     for (auto [i, v] : std::views::enumerate(mSwapChainImageViews)) {
       VkImageViewCreateInfo createInfo{
-        .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-        .image = mSwapChainImages[i],
-        .viewType = VK_IMAGE_VIEW_TYPE_2D,
-        .format = mPhysicalDevices[mSelectedDeviceIdx].surfaceFormats[mSurfaceFormatIdx].format,
-        .components = {
-          .r = VK_COMPONENT_SWIZZLE_IDENTITY,
-          .g = VK_COMPONENT_SWIZZLE_IDENTITY,
-          .b = VK_COMPONENT_SWIZZLE_IDENTITY,
-          .a = VK_COMPONENT_SWIZZLE_IDENTITY,
-        },
-        .subresourceRange = {
-          .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-          .baseMipLevel = 0,
-          .levelCount = 1,
-          .baseArrayLayer = 0,
-          .layerCount = 1,
-        },
+          .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+          .image = mSwapChainImages[i],
+          .viewType = VK_IMAGE_VIEW_TYPE_2D,
+          .format = mPhysicalDevices[mSelectedDeviceIdx].surfaceFormats[mSurfaceFormatIdx].format,
+          .components =
+              {
+                  .r = VK_COMPONENT_SWIZZLE_IDENTITY,
+                  .g = VK_COMPONENT_SWIZZLE_IDENTITY,
+                  .b = VK_COMPONENT_SWIZZLE_IDENTITY,
+                  .a = VK_COMPONENT_SWIZZLE_IDENTITY,
+              },
+          .subresourceRange =
+              {
+                  .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                  .baseMipLevel = 0,
+                  .levelCount = 1,
+                  .baseArrayLayer = 0,
+                  .layerCount = 1,
+              },
       };
 
-      if (vkCreateImageView(mDevice, &createInfo, nullptr, &v) != VK_SUCCESS)
-        MAPLE_FATAL("Failed to create image view");
+      if (vkCreateImageView(mDevice, &createInfo, nullptr, &v) != VK_SUCCESS) MAPLE_FATAL("Failed to create image view");
     }
   }
 
@@ -152,11 +326,10 @@ struct Renderer::Impl {
         .imageColorSpace = dev.surfaceFormats[mSurfaceFormatIdx].colorSpace,
         .imageExtent = mExtent,
         .imageArrayLayers = 1,  // always one, unless we're developing 3D applications where each image consists of multiple layers
-        .imageUsage =
-            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,  // for now will render directly to swapchain images but later on we'll render to
-                                                  // another image for post processing. in that case,
-                                                  // VK_IMAGE_USAGE_TRANSFER_DST_BIT is the more ideal option.
-                                                  // specifically need the value of those pixels, so enable it for better performance
+        .imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,  // for now will render directly to swapchain images but later on we'll render to
+                                                            // another image for post processing. in that case,
+                                                            // VK_IMAGE_USAGE_TRANSFER_DST_BIT is the more ideal option.
+                                                            // specifically need the value of those pixels, so enable it for better performance
         .preTransform = dev.surfaceCapabilities.currentTransform,
         .compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
         .presentMode = dev.presentModes[mPresentModeIdx],
@@ -325,8 +498,8 @@ struct Renderer::Impl {
         MAPLE_INFO(
             "\t\tQueue count: {} Compute: {} Graphics: {} Optical_flow: {} Protected: {} Sparse_binding: {} "
             "Transfer: {} Video_decode: {} Video_encode: {}",
-            caps.QueueCount, caps.Compute, caps.Graphics, caps.Optical_flow, caps.Protected, caps.Sparse_binding, caps.Transfer,
-            caps.Video_decode, caps.Video_encode);
+            caps.QueueCount, caps.Compute, caps.Graphics, caps.Optical_flow, caps.Protected, caps.Sparse_binding, caps.Transfer, caps.Video_decode,
+            caps.Video_encode);
       }
     }
   }
