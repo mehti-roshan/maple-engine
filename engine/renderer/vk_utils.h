@@ -8,6 +8,20 @@
   case x:              \
     return #x
 
+VkShaderModule CreateShaderModule(VkDevice device, const std::vector<char>& code) {
+  VkShaderModuleCreateInfo createInfo{
+    .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+    .codeSize = code.size(),
+    .pCode = reinterpret_cast<const uint32_t*>(code.data()),
+  };
+
+  VkShaderModule shaderModule;
+  if (vkCreateShaderModule(device, &createInfo, nullptr, &shaderModule) != VK_SUCCESS)
+    MAPLE_FATAL("Failed to create shader module");
+
+  return shaderModule;
+}
+
 VkExtent2D ChooseOptimalSwapExtent(const VkSurfaceCapabilitiesKHR& capabilities, uint32_t framebufferWidth, uint32_t framebufferHeight) {
   if (capabilities.currentExtent.width != std::numeric_limits<uint32_t>::max()) return capabilities.currentExtent;
 
