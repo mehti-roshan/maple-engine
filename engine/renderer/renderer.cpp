@@ -27,6 +27,8 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL vulkanDebugCallback(VkDebugUtilsMessageSev
   return VK_FALSE;
 }
 
+const int MAX_FRAMES_IN_FLIGHT = 2;
+
 namespace maple {
 
 struct Renderer::Impl {
@@ -61,9 +63,25 @@ struct Renderer::Impl {
   VkPipelineLayout mPipelineLayout;
   VkPipeline mPipeline;
 
+  std::vector<VkFramebuffer> mSwapChainFramebuffers;
+
+  VkCommandPool mCommandPool;
+  std::vector<VkCommandBuffer> mCommandBuffers;
+
+  std::vector<VkSemaphore> mImageAvailableSems, mRenderFinishedSems;
+  std::vector<VkFence> mInFlightFences;
+
+  uint32_t mCurrentFrame = 0;
+
+  FramebufferSizeCallback mFramebufferSizeCallback;
+
+  bool framebufferResized = false;
+
   void Init(const std::vector<const char*>& requiredExtensions, SurfaceCreateCallback surfaceCreateCallback,
             FramebufferSizeCallback framebufferSizeCallback) {
     MAPLE_INFO("Initializing Renderer...");
+    mFramebufferSizeCallback = framebufferSizeCallback;
+
     probeInstanceExtensions();
     probeInstanceLayers();
     createVulkanInstance(requiredExtensions);
@@ -84,29 +102,221 @@ struct Renderer::Impl {
     vkGetDeviceQueue(mDevice, mQueueIndices.Graphics, 0, &mQueueHandles.Graphics);
     vkGetDeviceQueue(mDevice, mQueueIndices.Present, 0, &mQueueHandles.Present);
 
-    createSwapChain(framebufferSizeCallback);
+    createSwapChain();
     createImageViews();
 
     createRenderPass();
     createGraphicsPipeline();
+
+    createFramebuffers();
+
+    createCommandPool();
+    createCommandBuffers();
+    createSyncObjects();
   }
+
+  void DrawFrame() {
+    vkWaitForFences(mDevice, 1, &mInFlightFences[mCurrentFrame], VK_TRUE, std::numeric_limits<uint64_t>::max());
+    vkResetFences(mDevice, 1, &mInFlightFences[mCurrentFrame]);
+
+    uint32_t imageIdx;
+    vkAcquireNextImageKHR(mDevice, mSwapChain, std::numeric_limits<uint64_t>::max(), mImageAvailableSems[mCurrentFrame], nullptr, &imageIdx);
+
+    recordCommandBuffer(mCommandBuffers[mCurrentFrame], imageIdx);
+
+    VkSemaphore waitSemaphores[] = {mImageAvailableSems[mCurrentFrame]};
+    VkPipelineStageFlags waitStages[] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
+    VkSemaphore signalSemaphores[] = {mRenderFinishedSems[mCurrentFrame]};
+    VkSubmitInfo submitInfo{
+        .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+        .waitSemaphoreCount = 1,
+        .pWaitSemaphores = waitSemaphores,
+        .pWaitDstStageMask = waitStages,
+        .commandBufferCount = 1,
+        .pCommandBuffers = &mCommandBuffers[mCurrentFrame],
+        .signalSemaphoreCount = 1,
+        .pSignalSemaphores = signalSemaphores,
+    };
+
+    if (vkQueueSubmit(mQueueHandles.Graphics, 1, &submitInfo, mInFlightFences[mCurrentFrame]) != VK_SUCCESS)
+      MAPLE_FATAL("Failed to submit draw command buffer");
+
+    VkSwapchainKHR swapchains[] = {mSwapChain};
+    VkPresentInfoKHR presentInfo{
+        .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+        .waitSemaphoreCount = 1,
+        .pWaitSemaphores = signalSemaphores,
+        .swapchainCount = 1,
+        .pSwapchains = swapchains,
+        .pImageIndices = &imageIdx,
+    };
+
+    VkResult result = vkQueuePresentKHR(mQueueHandles.Present, &presentInfo);
+
+    if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || framebufferResized) {
+      if (framebufferResized)
+        MAPLE_DEBUG("framebufferResized was set, recreating swap chain");
+      else
+        MAPLE_DEBUG("vkQueuePresentKHR returned {}, recreating swap chain", result == VK_ERROR_OUT_OF_DATE_KHR ? "VK_ERROR_OUT_OF_DATE_KHR" : "VK_SUBOPTIMAL_KHR");
+
+      framebufferResized = false;
+      recreateSwapChain();
+    } else if (result != VK_SUCCESS) {
+      MAPLE_FATAL("Failed to present swapchain image");
+    }
+
+    mCurrentFrame = (mCurrentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
+  }
+
+  void SetFrameBufferResized() { framebufferResized = true; }
 
   void Destroy() {
     MAPLE_INFO("Cleaning Renderer...");
+
+    vkDeviceWaitIdle(mDevice);  // Wait for device to become idle so semaphores and fences used while being destroyed
+
+    cleanupSwapChain();
+
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+      vkDestroySemaphore(mDevice, mImageAvailableSems[i], nullptr);
+      vkDestroySemaphore(mDevice, mRenderFinishedSems[i], nullptr);
+      vkDestroyFence(mDevice, mInFlightFences[i], nullptr);
+    }
+
+    vkDestroyCommandPool(mDevice, mCommandPool, nullptr);
 
     vkDestroyPipeline(mDevice, mPipeline, nullptr);
     vkDestroyPipelineLayout(mDevice, mPipelineLayout, nullptr);
     vkDestroyRenderPass(mDevice, mRenderPass, nullptr);
 
-    for (auto imgView : mSwapChainImageViews) vkDestroyImageView(mDevice, imgView, nullptr);
-
-    vkDestroySwapchainKHR(mDevice, mSwapChain, nullptr);
     vkDestroyDevice(mDevice, nullptr);
 
     vkDestroySurfaceKHR(mInstance, mSurface, nullptr);
 
     if (!validationLayers.empty()) DestroyDebugUtilsMessengerEXT(mInstance, mDebugMessenger, nullptr);
     vkDestroyInstance(mInstance, nullptr);
+  }
+
+  void recreateSwapChain() {
+    vkDeviceWaitIdle(mDevice);
+
+    cleanupSwapChain();
+
+    createSwapChain();
+    createImageViews();
+    createFramebuffers();
+  }
+
+  void cleanupSwapChain() {
+    for (auto fb : mSwapChainFramebuffers) vkDestroyFramebuffer(mDevice, fb, nullptr);
+    for (auto imgView : mSwapChainImageViews) vkDestroyImageView(mDevice, imgView, nullptr);
+    vkDestroySwapchainKHR(mDevice, mSwapChain, nullptr);
+  }
+
+  void recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIdx) {
+    vkResetCommandBuffer(commandBuffer, 0);
+
+    VkCommandBufferBeginInfo info{.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+
+    if (vkBeginCommandBuffer(commandBuffer, &info) != VK_SUCCESS) MAPLE_FATAL("Failed to begin recording command buffer");
+
+    VkClearValue clearColor = {{{0.0f, 0.0f, 0.0f, 1.0f}}};
+    VkRenderPassBeginInfo renderPassInfo{.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+                                         .renderPass = mRenderPass,
+                                         .framebuffer = mSwapChainFramebuffers[imageIdx],
+                                         .renderArea =
+                                             {
+                                                 .offset = {0, 0},
+                                                 .extent = mExtent,
+                                             },
+                                         .clearValueCount = 1,
+                                         .pClearValues = &clearColor};
+
+    vkCmdBeginRenderPass(commandBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, mPipeline);
+
+    VkViewport viewport{
+        .x = 0.0f,
+        .y = 0.0f,
+        .width = static_cast<float>(mExtent.width),
+        .height = static_cast<float>(mExtent.height),
+        .minDepth = 0.0f,
+        .maxDepth = 1.0f,
+    };
+    vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
+
+    VkRect2D scissor{
+        .offset = {0, 0},
+        .extent = mExtent,
+    };
+    vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
+
+    vkCmdDraw(commandBuffer, 3, 1, 0, 0);
+
+    vkCmdEndRenderPass(commandBuffer);
+
+    if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) MAPLE_FATAL("Failed to end recording of command buffer");
+  }
+
+  void createSyncObjects() {
+    VkSemaphoreCreateInfo semInfo{.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+    VkFenceCreateInfo fenceInfo{
+        .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+        .flags = VK_FENCE_CREATE_SIGNALED_BIT,  // Create it in a signaled state initially, so the first frame's rendering doesn't block indefinitely
+    };
+
+    mImageAvailableSems.resize(MAX_FRAMES_IN_FLIGHT);
+    mRenderFinishedSems.resize(MAX_FRAMES_IN_FLIGHT);
+    mInFlightFences.resize(MAX_FRAMES_IN_FLIGHT);
+
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+      vkCreateSemaphore(mDevice, &semInfo, nullptr, &mImageAvailableSems[i]);
+      vkCreateSemaphore(mDevice, &semInfo, nullptr, &mRenderFinishedSems[i]);
+      vkCreateFence(mDevice, &fenceInfo, nullptr, &mInFlightFences[i]);
+    }
+  }
+
+  void createCommandBuffers() {
+    mCommandBuffers.resize(MAX_FRAMES_IN_FLIGHT);
+
+    VkCommandBufferAllocateInfo allocInfo{
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+        .commandPool = mCommandPool,
+        .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+        .commandBufferCount = static_cast<uint32_t>(mCommandBuffers.size()),
+    };
+
+    if (vkAllocateCommandBuffers(mDevice, &allocInfo, mCommandBuffers.data()) != VK_SUCCESS) MAPLE_FATAL("Failed to create command buffers");
+  }
+
+  void createCommandPool() {
+    VkCommandPoolCreateInfo poolInfo{
+        .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+        .flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
+        .queueFamilyIndex = mQueueIndices.Graphics,
+    };
+
+    if (vkCreateCommandPool(mDevice, &poolInfo, nullptr, &mCommandPool) != VK_SUCCESS) MAPLE_FATAL("failed to create command pool");
+  }
+
+  void createFramebuffers() {
+    mSwapChainFramebuffers.resize(mSwapChainImageViews.size());
+
+    for (auto [i, v] : std::views::enumerate(mSwapChainImageViews)) {
+      VkImageView attachments[] = {v};
+      VkFramebufferCreateInfo framebufferInfo{
+          .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
+          .renderPass = mRenderPass,
+          .attachmentCount = 1,
+          .pAttachments = attachments,
+          .width = mExtent.width,
+          .height = mExtent.height,
+          .layers = 1,
+      };
+      if (vkCreateFramebuffer(mDevice, &framebufferInfo, nullptr, &mSwapChainFramebuffers[i]) != VK_SUCCESS)
+        MAPLE_FATAL("Failed to create swapchain framebuffer");
+    }
   }
 
   void createGraphicsPipeline() {
@@ -156,8 +366,8 @@ struct Renderer::Impl {
     VkViewport viewport{
         .x = 0.0f,
         .y = 0.0f,
-        .width = (float)mExtent.width,
-        .height = (float)mExtent.height,
+        .width = static_cast<float>(mExtent.width),
+        .height = static_cast<float>(mExtent.height),
         .minDepth = 0.0f,
         .maxDepth = 1.0f,
     };
@@ -259,12 +469,23 @@ struct Renderer::Impl {
         .pColorAttachments = &colorAttachRef,
     };
 
+    VkSubpassDependency dependency{
+        .srcSubpass = VK_SUBPASS_EXTERNAL,
+        .dstSubpass = 0,
+        .srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+        .dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+        .srcAccessMask = 0,
+        .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+    };
+
     VkRenderPassCreateInfo renderPassInfo{
         .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
         .attachmentCount = 1,
         .pAttachments = &colorAttach,
         .subpassCount = 1,
         .pSubpasses = &subpass,
+        .dependencyCount = 1,
+        .pDependencies = &dependency,
     };
 
     if (vkCreateRenderPass(mDevice, &renderPassInfo, nullptr, &mRenderPass) != VK_SUCCESS) MAPLE_FATAL("Failed to create render pass");
@@ -305,9 +526,10 @@ struct Renderer::Impl {
     }
   }
 
-  void createSwapChain(FramebufferSizeCallback framebufferSizeCallback) {
+  void createSwapChain() {
     uint32_t framebufferWidth, framebufferHeight;
-    framebufferSizeCallback(framebufferWidth, framebufferHeight);
+    mFramebufferSizeCallback(framebufferWidth, framebufferHeight);
+    MAPLE_DEBUG("Creating swapchain with framebuffer size {}x{}", framebufferWidth, framebufferHeight);
 
     const auto& dev = mPhysicalDevices[mSelectedDeviceIdx];
 
@@ -532,6 +754,8 @@ void Renderer::Init(const std::vector<const char*>& requiredExtensions, SurfaceC
                     FramebufferSizeCallback framebufferSizeCallback) {
   mPimpl->Init(requiredExtensions, surfaceCreateCallback, framebufferSizeCallback);
 }
+void Renderer::DrawFrame() { mPimpl->DrawFrame(); }
+void Renderer::SetFrameBufferResized() { mPimpl->SetFrameBufferResized(); }
 void Renderer::Destroy() { mPimpl->Destroy(); }
 
 }  // namespace maple

@@ -38,10 +38,22 @@ struct Engine::Impl {
   }
 
   void Run() {
-    int i = 1000000;
-    while (i != 0) {
+    uint32_t frameTimeSize = 1000;
+    std::vector<double> frameTimes;
+    frameTimes.reserve(frameTimeSize);
+    while (!glfwWindowShouldClose(mWindow)) {
       glfwPollEvents();
-      i--;
+      auto start = glfwGetTime();
+      mRenderer.DrawFrame();
+      auto dt = glfwGetTime() - start;
+      frameTimes.push_back(dt);
+      if (frameTimes.size() == frameTimeSize) {
+        double avgDt = 0.0f;
+        for (auto t : frameTimes) avgDt += t;
+        avgDt /= (double)frameTimeSize;
+        MAPLE_INFO("Average frame time over last {} frames: {:.2f} ms ({:.2f} FPS)", frameTimeSize, avgDt * 1000.0, 1.0 / avgDt);
+        frameTimes.clear();
+      }
     }
   }
 
@@ -50,12 +62,13 @@ struct Engine::Impl {
     if (!glfwInit()) MAPLE_FATAL("Failed to initialize glfw");
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 
-    // to simplify vulkan logic disable window resizing for now
-    // TODO: handle window resizing
-    glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
-
     mWindow = glfwCreateWindow(1280, 720, "Maple", nullptr, nullptr);
     if (!mWindow) MAPLE_FATAL("Failed to create window");
+
+    glfwSetWindowUserPointer(mWindow, this);
+    glfwSetFramebufferSizeCallback(mWindow, [](GLFWwindow* window, int width, int height) {
+      reinterpret_cast<Engine::Impl*>(glfwGetWindowUserPointer(window))->mRenderer.SetFrameBufferResized();
+    });
   }
 
   ~Impl() {

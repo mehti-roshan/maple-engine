@@ -20,6 +20,8 @@ class Renderer {
 
   void Init(const std::vector<const char*>& requiredExtensions, SurfaceCreateCallback surfaceCreateCallback,
             FramebufferSizeCallback getFramebufferSizeCallback);
+  void DrawFrame();
+  void SetFrameBufferResized();
   void Destroy();
 
  private:
