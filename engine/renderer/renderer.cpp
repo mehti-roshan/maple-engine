@@ -3,6 +3,8 @@
 #include <engine/renderer/renderer.h>
 #include <vulkan/vulkan.h>
 
+#include <array>
+#include <glm/glm.hpp>
 #include <map>
 #include <ranges>
 #include <set>
@@ -28,6 +30,42 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL vulkanDebugCallback(VkDebugUtilsMessageSev
 }
 
 const int MAX_FRAMES_IN_FLIGHT = 2;
+
+struct Vertex {
+  glm::vec2 pos;
+  glm::vec3 color;
+
+  static VkVertexInputBindingDescription GetBindingDescription() {
+    return VkVertexInputBindingDescription{
+        .binding = 0,
+        .stride = sizeof(Vertex),
+        .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
+    };
+  }
+
+  static std::array<VkVertexInputAttributeDescription, 2> GetAttributeDescriptions() {
+    return {
+        VkVertexInputAttributeDescription{
+            .location = 0,
+            .binding = 0,
+            .format = VK_FORMAT_R32G32_SFLOAT,
+            .offset = offsetof(Vertex, pos),
+        },
+        VkVertexInputAttributeDescription{
+            .location = 1,
+            .binding = 0,
+            .format = VK_FORMAT_R32G32B32_SFLOAT,
+            .offset = offsetof(Vertex, color),
+        },
+    };
+  }
+};
+
+const std::vector<Vertex> vertices = {
+    {{0.0, -0.5}, {1.0, 0.0, 0.0}},
+    {{0.5, 0.5}, {0.0, 1.0, 0.0}},
+    {{-0.5, 0.5}, {0.0, 0.0, 1.0}},
+};
 
 namespace maple {
 
@@ -77,6 +115,9 @@ struct Renderer::Impl {
 
   bool framebufferResized = false;
 
+  VkBuffer mVertexBuffer;
+  VkDeviceMemory mVertexBufferMemory;
+
   void Init(const std::vector<const char*>& requiredExtensions, SurfaceCreateCallback surfaceCreateCallback,
             FramebufferSizeCallback framebufferSizeCallback) {
     MAPLE_INFO("Initializing Renderer...");
@@ -111,6 +152,7 @@ struct Renderer::Impl {
     createFramebuffers();
 
     createCommandPool();
+    createVertexBuffer();
     createCommandBuffers();
     createSyncObjects();
   }
@@ -157,7 +199,8 @@ struct Renderer::Impl {
       if (framebufferResized)
         MAPLE_DEBUG("framebufferResized was set, recreating swap chain");
       else
-        MAPLE_DEBUG("vkQueuePresentKHR returned {}, recreating swap chain", result == VK_ERROR_OUT_OF_DATE_KHR ? "VK_ERROR_OUT_OF_DATE_KHR" : "VK_SUBOPTIMAL_KHR");
+        MAPLE_DEBUG("vkQueuePresentKHR returned {}, recreating swap chain",
+                    result == VK_ERROR_OUT_OF_DATE_KHR ? "VK_ERROR_OUT_OF_DATE_KHR" : "VK_SUBOPTIMAL_KHR");
 
       framebufferResized = false;
       recreateSwapChain();
@@ -174,6 +217,9 @@ struct Renderer::Impl {
     MAPLE_INFO("Cleaning Renderer...");
 
     vkDeviceWaitIdle(mDevice);  // Wait for device to become idle so semaphores and fences used while being destroyed
+
+    vkDestroyBuffer(mDevice, mVertexBuffer, nullptr);
+    vkFreeMemory(mDevice, mVertexBufferMemory, nullptr);
 
     cleanupSwapChain();
 
@@ -195,6 +241,27 @@ struct Renderer::Impl {
 
     if (!validationLayers.empty()) DestroyDebugUtilsMessengerEXT(mInstance, mDebugMessenger, nullptr);
     vkDestroyInstance(mInstance, nullptr);
+  }
+
+  void createVertexBuffer() {
+    VkDeviceSize bufferSize = sizeof(vertices[0]) * vertices.size();
+
+    VkBuffer stageBuf;
+    VkDeviceMemory stageBufMem;
+
+    CreateBuffer(mDevice, mPhysicalDevices[mSelectedDeviceIdx].memoryProperties, bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stageBuf, stageBufMem);
+
+    void* data;
+    vkMapMemory(mDevice, stageBufMem, 0, bufferSize, 0, &data);
+    memcpy(data, vertices.data(), bufferSize);
+    vkUnmapMemory(mDevice, stageBufMem);
+
+    CreateBuffer(mDevice, mPhysicalDevices[mSelectedDeviceIdx].memoryProperties, bufferSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, mVertexBuffer, mVertexBufferMemory);
+
+    CopyBuffer(mDevice, mCommandPool, mQueueHandles.Graphics, stageBuf, mVertexBuffer, bufferSize);
+    
+    vkDestroyBuffer(mDevice, stageBuf, nullptr);
+    vkFreeMemory(mDevice, stageBufMem, nullptr);
   }
 
   void recreateSwapChain() {
@@ -221,16 +288,15 @@ struct Renderer::Impl {
     if (vkBeginCommandBuffer(commandBuffer, &info) != VK_SUCCESS) MAPLE_FATAL("Failed to begin recording command buffer");
 
     VkClearValue clearColor = {{{0.0f, 0.0f, 0.0f, 1.0f}}};
-    VkRenderPassBeginInfo renderPassInfo{.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
-                                         .renderPass = mRenderPass,
-                                         .framebuffer = mSwapChainFramebuffers[imageIdx],
-                                         .renderArea =
-                                             {
-                                                 .offset = {0, 0},
-                                                 .extent = mExtent,
-                                             },
-                                         .clearValueCount = 1,
-                                         .pClearValues = &clearColor};
+    VkRect2D renderArea = {.offset = {0, 0}, .extent = mExtent};
+    VkRenderPassBeginInfo renderPassInfo{
+        .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+        .renderPass = mRenderPass,
+        .framebuffer = mSwapChainFramebuffers[imageIdx],
+        .renderArea = renderArea,
+        .clearValueCount = 1,
+        .pClearValues = &clearColor,
+    };
 
     vkCmdBeginRenderPass(commandBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
 
@@ -246,13 +312,13 @@ struct Renderer::Impl {
     };
     vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
 
-    VkRect2D scissor{
-        .offset = {0, 0},
-        .extent = mExtent,
-    };
+    VkRect2D scissor{.offset = {0, 0}, .extent = mExtent};
     vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
 
-    vkCmdDraw(commandBuffer, 3, 1, 0, 0);
+    VkDeviceSize offsets[] = {0};
+    vkCmdBindVertexBuffers(commandBuffer, 0, 1, &mVertexBuffer, offsets);
+
+    vkCmdDraw(commandBuffer, static_cast<uint32_t>(vertices.size()), 1, 0, 0);
 
     vkCmdEndRenderPass(commandBuffer);
 
@@ -351,10 +417,15 @@ struct Renderer::Impl {
         .pDynamicStates = dynamicStates.data(),
     };
 
+    auto bindingDescription = Vertex::GetBindingDescription();
+    auto attributeDescriptions = Vertex::GetAttributeDescriptions();
+
     VkPipelineVertexInputStateCreateInfo vertexInputInfo{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
-        .vertexBindingDescriptionCount = 0,
-        .vertexAttributeDescriptionCount = 0,
+        .vertexBindingDescriptionCount = 1,
+        .pVertexBindingDescriptions = &bindingDescription,
+        .vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescriptions.size()),
+        .pVertexAttributeDescriptions = attributeDescriptions.data(),
     };
 
     VkPipelineInputAssemblyStateCreateInfo inputAssembly{

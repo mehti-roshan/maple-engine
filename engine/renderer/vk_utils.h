@@ -8,6 +8,77 @@
   case x:              \
     return #x
 
+uint32_t FindMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties, VkPhysicalDeviceMemoryProperties memProperties) {
+  for (size_t i = 0; i < memProperties.memoryTypeCount; i++)
+    if (typeFilter & (1 << i) && (memProperties.memoryTypes[i].propertyFlags & properties) == properties) return i;
+
+  MAPLE_FATAL("Failed to find suitable memory type");
+}
+
+// WARNING
+// This code right here is a bit terrible
+// Firstly, you wanna make sure the command pool you submit this copy commandBuffer to, is separate from a graphics command pool to prevent memory fragmentation
+// Secondly, after submitting the copy command to the queue, we block until it completes, no use of fences
+// In reality, you should schedule as many as you have to the queue, and use multiple fences to see if all of them are finished
+// Gives the driver better opportunity for optimization since it sees all of those copy commands together
+void CopyBuffer(VkDevice device, VkCommandPool commandPool, VkQueue submitQueue, VkBuffer src, VkBuffer dst, VkDeviceSize size) {
+  VkCommandBufferAllocateInfo allocInfo{
+      .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+      .commandPool = commandPool,
+      .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+      .commandBufferCount = 1,
+  };
+
+  VkCommandBuffer commandBuffer;
+  vkAllocateCommandBuffers(device, &allocInfo, &commandBuffer);
+
+  VkCommandBufferBeginInfo beginInfo{
+      .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+      .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+  };
+  vkBeginCommandBuffer(commandBuffer, &beginInfo);
+
+  VkBufferCopy copyRegion{.size = size};
+  vkCmdCopyBuffer(commandBuffer, src, dst, 1, &copyRegion);
+
+  vkEndCommandBuffer(commandBuffer);
+
+  VkSubmitInfo submitInfo{
+    .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+    .commandBufferCount = 1,
+    .pCommandBuffers = &commandBuffer,
+  };
+  vkQueueSubmit(submitQueue, 1, &submitInfo, nullptr);
+  vkQueueWaitIdle(submitQueue);
+
+  vkFreeCommandBuffers(device, commandPool, 1, &commandBuffer);
+}
+
+void CreateBuffer(VkDevice device, VkPhysicalDeviceMemoryProperties deviceMemProperties, VkDeviceSize size, VkBufferUsageFlags usage,
+                  VkMemoryPropertyFlags properties, VkBuffer& buffer, VkDeviceMemory& bufferMemory) {
+  VkBufferCreateInfo bufferInfo{
+      .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+      .size = size,
+      .usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+      .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+  };
+
+  if (vkCreateBuffer(device, &bufferInfo, nullptr, &buffer) != VK_SUCCESS) MAPLE_FATAL("Failed to create vertex buffer");
+
+  VkMemoryRequirements memRequirements;
+  vkGetBufferMemoryRequirements(device, buffer, &memRequirements);
+
+  VkMemoryAllocateInfo allocInfo{
+      .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+      .allocationSize = memRequirements.size,
+      .memoryTypeIndex = FindMemoryType(memRequirements.memoryTypeBits, properties, deviceMemProperties),
+  };
+
+  if (vkAllocateMemory(device, &allocInfo, nullptr, &bufferMemory) != VK_SUCCESS) MAPLE_FATAL("Failed to allocate vertex buffer memory");
+
+  vkBindBufferMemory(device, buffer, bufferMemory, 0);
+}
+
 VkShaderModule CreateShaderModule(VkDevice device, const std::vector<char>& code) {
   VkShaderModuleCreateInfo createInfo{
       .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
@@ -89,6 +160,7 @@ struct PhysicalDevice {
   VkPhysicalDevice dev;
   VkPhysicalDeviceProperties properties;
   VkPhysicalDeviceFeatures features;
+  VkPhysicalDeviceMemoryProperties memoryProperties;
   std::vector<VkExtensionProperties> extensions;
 
   std::vector<VkQueueFamilyProperties> queueFamiliesProperties;
@@ -142,6 +214,7 @@ std::vector<PhysicalDevice> GetPhysicalDevices(VkInstance instance, VkSurfaceKHR
 
     vkGetPhysicalDeviceProperties(dev.dev, &dev.properties);
     vkGetPhysicalDeviceFeatures(dev.dev, &dev.features);
+    vkGetPhysicalDeviceMemoryProperties(dev.dev, &dev.memoryProperties);
 
     vkEnumerateDeviceExtensionProperties(dev.dev, nullptr, &count, nullptr);
     dev.extensions.resize(count);
