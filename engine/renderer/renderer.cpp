@@ -1,10 +1,13 @@
 #include <engine/file/file.h>
 #include <engine/logging/log_macros.h>
 #include <engine/renderer/renderer.h>
-#include <vulkan/vulkan.h>
+#include <vulkan/vulkan.hpp>
 
 #include <array>
+#define GLM_FORCE_RADIANS
+#include <chrono>
 #include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 #include <map>
 #include <ranges>
 #include <set>
@@ -72,6 +75,12 @@ const std::vector<uint16_t> indices = {
     0, 1, 2, 2, 3, 0,
 };
 
+struct UBO {
+  glm::mat4 model;
+  glm::mat4 view;
+  glm::mat4 projection;
+};
+
 namespace maple {
 
 struct Renderer::Impl {
@@ -103,6 +112,9 @@ struct Renderer::Impl {
 
   VkRenderPass mRenderPass;
   VkShaderModule mVertShader, mFragShader;
+  VkDescriptorSetLayout mDescriptorSetLayout;
+  VkDescriptorPool mDescriptorPool;
+  std::vector<VkDescriptorSet> mDescriptorSets;
   VkPipelineLayout mPipelineLayout;
   VkPipeline mPipeline;
 
@@ -125,6 +137,10 @@ struct Renderer::Impl {
 
   VkBuffer mIndexBuffer;
   VkDeviceMemory mIndexBufferMemory;
+
+  std::vector<VkBuffer> mUniformBuffers;
+  std::vector<VkDeviceMemory> mUniformBuffersMemory;
+  std::vector<void*> mUniformBuffersMapped;
 
   void Init(const std::vector<const char*>& requiredExtensions, SurfaceCreateCallback surfaceCreateCallback,
             FramebufferSizeCallback framebufferSizeCallback) {
@@ -155,6 +171,7 @@ struct Renderer::Impl {
     createImageViews();
 
     createRenderPass();
+    createDescriptorSetLayout();
     createGraphicsPipeline();
 
     createFramebuffers();
@@ -162,6 +179,9 @@ struct Renderer::Impl {
     createCommandPool();
     createVertexBuffer();
     createIndexBuffer();
+    createUniformBuffers();
+    createDescriptorPool();
+    createDescriptorSets();
     createCommandBuffers();
     createSyncObjects();
   }
@@ -169,6 +189,19 @@ struct Renderer::Impl {
   void DrawFrame() {
     vkWaitForFences(mDevice, 1, &mInFlightFences[mCurrentFrame], VK_TRUE, std::numeric_limits<uint64_t>::max());
     vkResetFences(mDevice, 1, &mInFlightFences[mCurrentFrame]);
+
+    static auto startTime = std::chrono::high_resolution_clock::now();
+    auto currentTime = std::chrono::high_resolution_clock::now();
+
+    float time = std::chrono::duration<float, std::chrono::seconds::period>(currentTime - startTime).count();
+    UBO ubo{
+        .model = glm::rotate(glm::mat4(1.0f), 0.0f * glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f)),
+        .view = glm::lookAt(glm::vec3(glm::sin(time), 0.0f, glm::cos(time)) * 5.0f, glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f)),
+        .projection = glm::perspective(glm::radians(75.0f), mExtent.width / (float)mExtent.height, 0.1f, 2000.0f),
+    };
+    ubo.projection[1][1] *= -1.0f; // Y coordinate flip
+
+    memcpy(mUniformBuffersMapped[mCurrentFrame], &ubo, sizeof(ubo));
 
     uint32_t imageIdx;
     vkAcquireNextImageKHR(mDevice, mSwapChain, std::numeric_limits<uint64_t>::max(), mImageAvailableSems[mCurrentFrame], nullptr, &imageIdx);
@@ -227,6 +260,12 @@ struct Renderer::Impl {
 
     vkDeviceWaitIdle(mDevice);  // Wait for device to become idle so semaphores and fences used while being destroyed
 
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+      vkUnmapMemory(mDevice, mUniformBuffersMemory[i]);
+      vkDestroyBuffer(mDevice, mUniformBuffers[i], nullptr);
+      vkFreeMemory(mDevice, mUniformBuffersMemory[i], nullptr);
+    }
+
     vkDestroyBuffer(mDevice, mIndexBuffer, nullptr);
     vkFreeMemory(mDevice, mIndexBufferMemory, nullptr);
 
@@ -234,6 +273,9 @@ struct Renderer::Impl {
     vkFreeMemory(mDevice, mVertexBufferMemory, nullptr);
 
     cleanupSwapChain();
+
+    vkDestroyDescriptorPool(mDevice, mDescriptorPool, nullptr);
+    vkDestroyDescriptorSetLayout(mDevice, mDescriptorSetLayout, nullptr);
 
     for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
       vkDestroySemaphore(mDevice, mImageAvailableSems[i], nullptr);
@@ -255,19 +297,99 @@ struct Renderer::Impl {
     vkDestroyInstance(mInstance, nullptr);
   }
 
+  void createDescriptorSets() {
+    std::vector<VkDescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, mDescriptorSetLayout);
+    VkDescriptorSetAllocateInfo allocInfo{
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+        .descriptorPool = mDescriptorPool,
+        .descriptorSetCount = MAX_FRAMES_IN_FLIGHT,
+        .pSetLayouts = layouts.data(),
+    };
+
+    mDescriptorSets.resize(MAX_FRAMES_IN_FLIGHT);
+    if (vkAllocateDescriptorSets(mDevice, &allocInfo, mDescriptorSets.data()) != VK_SUCCESS) MAPLE_FATAL("Failed to allocate descriptor sets");
+
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+      VkDescriptorBufferInfo bufferInfo{
+          .buffer = mUniformBuffers[i],
+          .offset = 0,
+          .range = sizeof(UBO),
+      };
+
+      VkWriteDescriptorSet descriptorWrite{
+        .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+        .dstSet = mDescriptorSets[i],
+        .descriptorCount = 1,
+        .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+        .pBufferInfo = &bufferInfo,
+      };
+
+      vkUpdateDescriptorSets(mDevice, 1, &descriptorWrite, 0, nullptr);
+    }
+  }
+
+  void createDescriptorPool() {
+    VkDescriptorPoolSize poolSize{.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, .descriptorCount = MAX_FRAMES_IN_FLIGHT};
+    VkDescriptorPoolCreateInfo poolInfo{
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+        .maxSets = MAX_FRAMES_IN_FLIGHT,
+        .poolSizeCount = 1,
+        .pPoolSizes = &poolSize,
+    };
+
+    if (vkCreateDescriptorPool(mDevice, &poolInfo, nullptr, &mDescriptorPool) != VK_SUCCESS) MAPLE_FATAL("Failed to create descriptor pool");
+  }
+
+  void createUniformBuffers() {
+    mUniformBuffers.resize(MAX_FRAMES_IN_FLIGHT);
+    mUniformBuffersMapped.resize(MAX_FRAMES_IN_FLIGHT);
+    mUniformBuffersMemory.resize(MAX_FRAMES_IN_FLIGHT);
+
+    VkDeviceSize bufferSize = sizeof(UBO);
+
+    auto deviceMemProps = mPhysicalDevices[mSelectedDeviceIdx].memoryProperties;
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+      CreateBuffer(mDevice, deviceMemProps, bufferSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                   VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, mUniformBuffers[i], mUniformBuffersMemory[i]);
+
+      vkMapMemory(mDevice, mUniformBuffersMemory[i], 0, bufferSize, 0, &mUniformBuffersMapped[i]);
+    }
+  }
+
+  void createDescriptorSetLayout() {
+    VkDescriptorSetLayoutBinding uboLayoutBinding{
+        .binding = 0,
+        .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+        .descriptorCount = 1,
+        .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+    };
+
+    VkDescriptorSetLayoutCreateInfo layoutInfo{
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        .bindingCount = 1,
+        .pBindings = &uboLayoutBinding,
+    };
+
+    if (vkCreateDescriptorSetLayout(mDevice, &layoutInfo, nullptr, &mDescriptorSetLayout) != VK_SUCCESS)
+      MAPLE_FATAL("Failed to create descriptor set layout");
+  }
+
   void createIndexBuffer() {
     VkDeviceSize bufferSize = sizeof(indices[0]) * indices.size();
 
     VkBuffer stageBuf;
     VkDeviceMemory stageBufMem;
-    CreateBuffer(mDevice, mPhysicalDevices[mSelectedDeviceIdx].memoryProperties, bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stageBuf, stageBufMem);
+    CreateBuffer(mDevice, mPhysicalDevices[mSelectedDeviceIdx].memoryProperties, bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stageBuf, stageBufMem);
 
     void* data;
     vkMapMemory(mDevice, stageBufMem, 0, bufferSize, 0, &data);
     memcpy(data, indices.data(), bufferSize);
     vkUnmapMemory(mDevice, stageBufMem);
 
-    CreateBuffer(mDevice, mPhysicalDevices[mSelectedDeviceIdx].memoryProperties, bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, mIndexBuffer, mIndexBufferMemory);
+    CreateBuffer(mDevice, mPhysicalDevices[mSelectedDeviceIdx].memoryProperties, bufferSize,
+                 VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, mIndexBuffer,
+                 mIndexBufferMemory);
 
     CopyBuffer(mDevice, mCommandPool, mQueueHandles.Graphics, stageBuf, mIndexBuffer, bufferSize);
 
@@ -353,6 +475,7 @@ struct Renderer::Impl {
     VkDeviceSize offsets[] = {0};
     vkCmdBindVertexBuffers(commandBuffer, 0, 1, &mVertexBuffer, offsets);
     vkCmdBindIndexBuffer(commandBuffer, mIndexBuffer, 0, VK_INDEX_TYPE_UINT16);
+    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, mPipelineLayout, 0, 1, &mDescriptorSets[mCurrentFrame], 0, nullptr);
 
     vkCmdDrawIndexed(commandBuffer, indices.size(), 1, 0, 0, 0);
 
@@ -498,7 +621,7 @@ struct Renderer::Impl {
         .rasterizerDiscardEnable = false,
         .polygonMode = VK_POLYGON_MODE_FILL,
         .cullMode = VK_CULL_MODE_BACK_BIT,
-        .frontFace = VK_FRONT_FACE_CLOCKWISE,
+        .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE,
         .depthBiasEnable = false,
         .lineWidth = 1.0f,
     };
@@ -523,6 +646,8 @@ struct Renderer::Impl {
 
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+        .setLayoutCount = 1,
+        .pSetLayouts = &mDescriptorSetLayout,
     };
 
     if (vkCreatePipelineLayout(mDevice, &pipelineLayoutInfo, nullptr, &mPipelineLayout) != VK_SUCCESS)

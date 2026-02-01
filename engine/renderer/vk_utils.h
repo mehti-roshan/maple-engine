@@ -59,7 +59,7 @@ void CreateBuffer(VkDevice device, VkPhysicalDeviceMemoryProperties deviceMemPro
   VkBufferCreateInfo bufferInfo{
       .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
       .size = size,
-      .usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+      .usage = usage,
       .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
   };
 
