@@ -62,9 +62,14 @@ struct Vertex {
 };
 
 const std::vector<Vertex> vertices = {
-    {{0.0, -0.5}, {1.0, 0.0, 0.0}},
-    {{0.5, 0.5}, {0.0, 1.0, 0.0}},
-    {{-0.5, 0.5}, {0.0, 0.0, 1.0}},
+    {{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},
+    {{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}},
+    {{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}},
+    {{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}},
+};
+
+const std::vector<uint16_t> indices = {
+    0, 1, 2, 2, 3, 0,
 };
 
 namespace maple {
@@ -118,6 +123,9 @@ struct Renderer::Impl {
   VkBuffer mVertexBuffer;
   VkDeviceMemory mVertexBufferMemory;
 
+  VkBuffer mIndexBuffer;
+  VkDeviceMemory mIndexBufferMemory;
+
   void Init(const std::vector<const char*>& requiredExtensions, SurfaceCreateCallback surfaceCreateCallback,
             FramebufferSizeCallback framebufferSizeCallback) {
     MAPLE_INFO("Initializing Renderer...");
@@ -153,6 +161,7 @@ struct Renderer::Impl {
 
     createCommandPool();
     createVertexBuffer();
+    createIndexBuffer();
     createCommandBuffers();
     createSyncObjects();
   }
@@ -218,6 +227,9 @@ struct Renderer::Impl {
 
     vkDeviceWaitIdle(mDevice);  // Wait for device to become idle so semaphores and fences used while being destroyed
 
+    vkDestroyBuffer(mDevice, mIndexBuffer, nullptr);
+    vkFreeMemory(mDevice, mIndexBufferMemory, nullptr);
+
     vkDestroyBuffer(mDevice, mVertexBuffer, nullptr);
     vkFreeMemory(mDevice, mVertexBufferMemory, nullptr);
 
@@ -243,23 +255,46 @@ struct Renderer::Impl {
     vkDestroyInstance(mInstance, nullptr);
   }
 
+  void createIndexBuffer() {
+    VkDeviceSize bufferSize = sizeof(indices[0]) * indices.size();
+
+    VkBuffer stageBuf;
+    VkDeviceMemory stageBufMem;
+    CreateBuffer(mDevice, mPhysicalDevices[mSelectedDeviceIdx].memoryProperties, bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stageBuf, stageBufMem);
+
+    void* data;
+    vkMapMemory(mDevice, stageBufMem, 0, bufferSize, 0, &data);
+    memcpy(data, indices.data(), bufferSize);
+    vkUnmapMemory(mDevice, stageBufMem);
+
+    CreateBuffer(mDevice, mPhysicalDevices[mSelectedDeviceIdx].memoryProperties, bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, mIndexBuffer, mIndexBufferMemory);
+
+    CopyBuffer(mDevice, mCommandPool, mQueueHandles.Graphics, stageBuf, mIndexBuffer, bufferSize);
+
+    vkDestroyBuffer(mDevice, stageBuf, nullptr);
+    vkFreeMemory(mDevice, stageBufMem, nullptr);
+  }
+
   void createVertexBuffer() {
     VkDeviceSize bufferSize = sizeof(vertices[0]) * vertices.size();
 
     VkBuffer stageBuf;
     VkDeviceMemory stageBufMem;
 
-    CreateBuffer(mDevice, mPhysicalDevices[mSelectedDeviceIdx].memoryProperties, bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stageBuf, stageBufMem);
+    CreateBuffer(mDevice, mPhysicalDevices[mSelectedDeviceIdx].memoryProperties, bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stageBuf, stageBufMem);
 
     void* data;
     vkMapMemory(mDevice, stageBufMem, 0, bufferSize, 0, &data);
     memcpy(data, vertices.data(), bufferSize);
     vkUnmapMemory(mDevice, stageBufMem);
 
-    CreateBuffer(mDevice, mPhysicalDevices[mSelectedDeviceIdx].memoryProperties, bufferSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, mVertexBuffer, mVertexBufferMemory);
+    CreateBuffer(mDevice, mPhysicalDevices[mSelectedDeviceIdx].memoryProperties, bufferSize,
+                 VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, mVertexBuffer,
+                 mVertexBufferMemory);
 
     CopyBuffer(mDevice, mCommandPool, mQueueHandles.Graphics, stageBuf, mVertexBuffer, bufferSize);
-    
+
     vkDestroyBuffer(mDevice, stageBuf, nullptr);
     vkFreeMemory(mDevice, stageBufMem, nullptr);
   }
@@ -317,8 +352,9 @@ struct Renderer::Impl {
 
     VkDeviceSize offsets[] = {0};
     vkCmdBindVertexBuffers(commandBuffer, 0, 1, &mVertexBuffer, offsets);
+    vkCmdBindIndexBuffer(commandBuffer, mIndexBuffer, 0, VK_INDEX_TYPE_UINT16);
 
-    vkCmdDraw(commandBuffer, static_cast<uint32_t>(vertices.size()), 1, 0, 0);
+    vkCmdDrawIndexed(commandBuffer, indices.size(), 1, 0, 0, 0);
 
     vkCmdEndRenderPass(commandBuffer);
 
