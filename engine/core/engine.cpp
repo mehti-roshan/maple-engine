@@ -44,7 +44,6 @@ struct Engine::Impl {
     while (!glfwWindowShouldClose(mWindow)) {
       glfwPollEvents();
       auto start = glfwGetTime();
-      mRenderer.DrawFrame();
       auto dt = glfwGetTime() - start;
       frameTimes.push_back(dt);
       if (frameTimes.size() == frameTimeSize) {
@@ -73,9 +72,6 @@ struct Engine::Impl {
 
   ~Impl() {
     MAPLE_INFO("Shutting down...");
-
-    mRenderer.Destroy();
-
     glfwDestroyWindow(mWindow);
     glfwTerminate();
   }
