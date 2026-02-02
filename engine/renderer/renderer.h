@@ -31,6 +31,8 @@ class Renderer {
   vk::raii::Instance mInstance = nullptr;
   vk::raii::DebugUtilsMessengerEXT mDebugMessenger = nullptr;
   vk::raii::PhysicalDevice mPhysicalDevice = nullptr;
+  vk::raii::Device mDevice = nullptr;
+  vk::raii::Queue mGraphicsQueue = nullptr;
 
   void createInstance(const std::vector<const char*>& glfwExtensions);
   void setupDebugMessenger();
