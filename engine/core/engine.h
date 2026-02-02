@@ -1,19 +1,32 @@
 #pragma once
-#include <memory>
+#include <engine/renderer/renderer.h>
+#define GLFW_INCLUDE_VULKAN
+#include <GLFW/glfw3.h>
 
-struct GLFWwindow;
+struct GLFWContext {
+  GLFWwindow* mWindow = nullptr;
+
+  ~GLFWContext() {
+    if (mWindow) {
+      glfwDestroyWindow(mWindow);
+      mWindow = nullptr;
+    }
+    glfwTerminate();
+  }
+};
 
 namespace maple {
 class Engine {
  public:
-  Engine();
   ~Engine();
 
   void Init();
   void Run();
 
  private:
-  struct Impl;
-  std::unique_ptr<Impl> mPimpl;
+ GLFWContext mGLFWContext;
+ Renderer mRenderer;
+
+  void initGLFW();
 };
 }  // namespace maple

@@ -1,6 +1,7 @@
 #pragma once
 #include <functional>
 #include <vector>
+
 #define VULKAN_HPP_NO_STRUCT_CONSTRUCTORS
 #if defined(__INTELLISENSE__) || !defined(USE_CPP20_MODULES)
 #include <vulkan/vulkan_raii.hpp>
@@ -25,7 +26,13 @@ namespace maple {
 
 class Renderer {
  public:
+ ~Renderer() {
+  mDevice.waitIdle();
+ }
+
   void Init(const std::vector<const char*>& glfwExtensions, SurfaceCreateCallback, FrameBufferSizeCallback);
+  void DrawFrame();
+
   void SetFrameBufferResized() { mFrameBufferResized = true; }
 
  private:
@@ -35,19 +42,25 @@ class Renderer {
   vk::raii::Context mContext;
   vk::raii::Instance mInstance = nullptr;
   vk::raii::DebugUtilsMessengerEXT mDebugMessenger = nullptr;
+  vk::raii::SurfaceKHR mSurface = nullptr;
   vk::raii::PhysicalDevice mPhysicalDevice = nullptr;
   vk::raii::Device mDevice = nullptr;
   vk::raii::Queue mGraphicsQueue = nullptr;
   vk::raii::Queue mPresentQueue = nullptr;
-  vk::raii::SurfaceKHR mSurface = nullptr;
   vk::raii::SwapchainKHR mSwapChain = nullptr;
   SwapChainDetails mSwapChainDetails;
   std::vector<vk::Image> mSwapChainImages;
-  std::vector<vk::ImageView> mSwapChainImageViews;
+  std::vector<vk::raii::ImageView> mSwapChainImageViews;
+
   vk::raii::PipelineLayout mPipelineLayout = nullptr;
   vk::raii::Pipeline mGraphicsPipeline = nullptr;
+
   vk::raii::CommandPool mCommandPool = nullptr;
   vk::raii::CommandBuffer mCommandBuffer = nullptr;
+
+  vk::raii::Semaphore mPresentCompleteSem = nullptr;
+  vk::raii::Semaphore mRenderCompleteSem = nullptr;
+  vk::raii::Fence mDrawFence = nullptr;
 
   void createInstance(const std::vector<const char*>& glfwExtensions);
   void setupDebugMessenger();
@@ -59,5 +72,6 @@ class Renderer {
   void createCommandPool();
   void createCommandBuffer();
   void recordCommandBuffer(uint32_t imageIdx);
+  void createSyncObjects();
 };
 }  // namespace maple

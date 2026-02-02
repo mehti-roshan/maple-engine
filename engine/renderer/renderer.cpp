@@ -72,12 +72,17 @@ QueueFamilyIndices getDeviceQueueFamilyIndices(vk::raii::PhysicalDevice device, 
 bool isPhysicalDeviceSuitable(vk::raii::PhysicalDevice device, vk::SurfaceKHR surface) {
   if (device.getProperties().apiVersion < VK_API_VERSION_1_3) return false;
 
-  auto featureChain =
-    device.getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan13Features, vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>();
+  auto featureChain = device.getFeatures2<vk::PhysicalDeviceFeatures2,
+                                          vk::PhysicalDeviceVulkan11Features,
+                                          vk::PhysicalDeviceVulkan13Features,
+                                          vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>();
+  auto vk11Features = featureChain.get<vk::PhysicalDeviceVulkan11Features>();
   auto vk13Features = featureChain.get<vk::PhysicalDeviceVulkan13Features>();
   auto extDynStateFeatures = featureChain.get<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>();
 
-  if (!vk13Features.dynamicRendering || !extDynStateFeatures.extendedDynamicState) return false;
+  if (!vk11Features.shaderDrawParameters || !vk13Features.dynamicRendering || !vk13Features.synchronization2 ||
+      !extDynStateFeatures.extendedDynamicState)
+    return false;
 
   auto extensions = device.enumerateDeviceExtensionProperties();
   for (auto ext : deviceExtensions)
@@ -181,6 +186,39 @@ void Renderer::Init(const std::vector<const char*>& glfwExtensions, SurfaceCreat
   createGraphicsPipeline();
   createCommandPool();
   createCommandBuffer();
+  createSyncObjects();
+}
+
+void Renderer::DrawFrame() {
+  auto fenceResult = mDevice.waitForFences(*mDrawFence, vk::True, UINT64_MAX);
+
+  auto [result, imageIdx] = mSwapChain.acquireNextImage(UINT64_MAX, *mPresentCompleteSem, nullptr);
+  recordCommandBuffer(imageIdx);
+
+  mDevice.resetFences(*mDrawFence);
+
+  vk::PipelineStageFlags waitDestinationStageMask(vk::PipelineStageFlagBits::eColorAttachmentOutput);
+  const vk::SubmitInfo submitInfo{
+    .waitSemaphoreCount = 1,
+    .pWaitSemaphores = &*mPresentCompleteSem,
+    .pWaitDstStageMask = &waitDestinationStageMask,
+    .commandBufferCount = 1,
+    .pCommandBuffers = &*mCommandBuffer,
+    .signalSemaphoreCount = 1,
+    .pSignalSemaphores = &*mRenderCompleteSem,
+  };
+
+  mGraphicsQueue.submit(submitInfo, *mDrawFence);
+
+  const vk::PresentInfoKHR presentInfoKHR{
+    .waitSemaphoreCount = 1,
+    .pWaitSemaphores = &*mRenderCompleteSem,
+    .swapchainCount = 1,
+    .pSwapchains = &*mSwapChain,
+    .pImageIndices = &imageIdx,
+  };
+
+  auto presentResult = mPresentQueue.presentKHR(presentInfoKHR);
 }
 
 void Renderer::createInstance(const std::vector<const char*>& glfwExtensions) {
@@ -241,11 +279,11 @@ void Renderer::pickPhysicalDevice() {
   auto devices = mInstance.enumeratePhysicalDevices();
   std::map<float, vk::raii::PhysicalDevice> scoredDevices;
 
-  for (auto const& device : devices) {
-    if (!isPhysicalDeviceSuitable(vk::raii::PhysicalDevice(device), *mSurface)) continue;
-    auto qIndices = getDeviceQueueFamilyIndices(vk::raii::PhysicalDevice(device), *mSurface);
-    float score = scorePhysicalDevice(vk::raii::PhysicalDevice(device), qIndices);
-    scoredDevices.insert({score, vk::raii::PhysicalDevice(device)});
+  for (auto& device : devices) {
+    if (!isPhysicalDeviceSuitable(device, *mSurface)) continue;
+    auto qIndices = getDeviceQueueFamilyIndices(device, *mSurface);
+    float score = scorePhysicalDevice(device, qIndices);
+    scoredDevices.insert({score, device});
   }
 
   if (scoredDevices.empty()) MAPLE_FATAL("Failed to find a suitable GPU");
@@ -260,11 +298,15 @@ void Renderer::createLogicalDevice() {
   float queuePriority = 0.5f;
   vk::DeviceQueueCreateInfo deviceQueueCreateInfo{.queueFamilyIndex = qIndices.graphics, .queueCount = 1, .pQueuePriorities = &queuePriority};
 
-  vk::StructureChain<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan13Features, vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>
+  vk::StructureChain<vk::PhysicalDeviceFeatures2,
+                     vk::PhysicalDeviceVulkan11Features,
+                     vk::PhysicalDeviceVulkan13Features,
+                     vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>
     featureChain = {
-      {},                             // vk::PhysicalDeviceFeatures2 (empty for now)
-      {.dynamicRendering = true},     // Enable dynamic rendering from Vulkan 1.3
-      {.extendedDynamicState = true}  // Enable extended dynamic state from the extension
+      {},                                                    // vk::PhysicalDeviceFeatures2 (empty for now)
+      {.shaderDrawParameters = true},                        // Enable shader draw parameters from Vulkan 1.1
+      {.synchronization2 = true, .dynamicRendering = true},  // Enable dynamic rendering from Vulkan 1.3
+      {.extendedDynamicState = true}                         // Enable extended dynamic state from the extension
     };
 
   vk::DeviceCreateInfo deviceCreateInfo{
@@ -489,6 +531,15 @@ void Renderer::recordCommandBuffer(uint32_t imageIdx) {
                           vk::PipelineStageFlagBits2::eColorAttachmentOutput,
                           vk::PipelineStageFlagBits2::eBottomOfPipe);
   mCommandBuffer.end();
+}
+
+void Renderer::createSyncObjects() {
+  vk::SemaphoreCreateInfo semaphoreInfo;
+  vk::FenceCreateInfo fenceInfo{.flags = vk::FenceCreateFlagBits::eSignaled};
+
+  mPresentCompleteSem = vk::raii::Semaphore(mDevice, semaphoreInfo);
+  mRenderCompleteSem = vk::raii::Semaphore(mDevice, semaphoreInfo);
+  mDrawFence = vk::raii::Fence(mDevice, fenceInfo);
 }
 
 }  // namespace maple
