@@ -8,6 +8,7 @@
 #include <map>
 #include <utility>
 #include <vector>
+#include <vulkan/vulkan_enums.hpp>
 #include <vulkan/vulkan_handles.hpp>
 #include <vulkan/vulkan_raii.hpp>
 #include <vulkan/vulkan_structs.hpp>
@@ -142,6 +143,29 @@ vk::Extent2D chooseSwapExtent(const vk::SurfaceCapabilitiesKHR& capabilities, Fr
   };
 
   return vk::raii::ShaderModule(device, createInfo);
+}
+
+void transition_image_layout(vk::Image image,
+                             vk::CommandBuffer commandBuffer,
+                             vk::ImageLayout oldLayout,
+                             vk::ImageLayout newLayout,
+                             vk::AccessFlags2 srcAccessMask,
+                             vk::AccessFlags2 dstAccessMask,
+                             vk::PipelineStageFlags2 srcStageMask,
+                             vk::PipelineStageFlags2 dstStageMask) {
+  vk::ImageMemoryBarrier2 barrier = {
+    .srcStageMask = srcStageMask,
+    .srcAccessMask = srcAccessMask,
+    .dstStageMask = dstStageMask,
+    .dstAccessMask = dstAccessMask,
+    .oldLayout = oldLayout,
+    .newLayout = newLayout,
+    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+    .image = image,
+    .subresourceRange = {.aspectMask = vk::ImageAspectFlagBits::eColor, .baseMipLevel = 0, .levelCount = 1, .baseArrayLayer = 0, .layerCount = 1}};
+  vk::DependencyInfo dependencyInfo = {.dependencyFlags = {}, .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &barrier};
+  commandBuffer.pipelineBarrier2(dependencyInfo);
 }
 
 namespace maple {
@@ -415,6 +439,56 @@ void Renderer::createCommandBuffer() {
   };
 
   mCommandBuffer = std::move(vk::raii::CommandBuffers(mDevice, allocInfo).front());
+}
+
+void Renderer::recordCommandBuffer(uint32_t imageIdx) {
+  mCommandBuffer.begin({});
+  transition_image_layout(mSwapChainImages[imageIdx],
+                          mCommandBuffer,
+                          vk::ImageLayout::eUndefined,
+                          vk::ImageLayout::eColorAttachmentOptimal,
+                          {},
+                          vk::AccessFlagBits2::eColorAttachmentWrite,
+                          vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+                          vk::PipelineStageFlagBits2::eColorAttachmentOutput);
+
+  vk::ClearValue clearColor = vk::ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f);
+  vk::RenderingAttachmentInfo attachmentInfo = {
+    .imageView = mSwapChainImageViews[imageIdx],
+    .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
+    .loadOp = vk::AttachmentLoadOp::eClear,
+    .storeOp = vk::AttachmentStoreOp::eStore,
+    .clearValue = clearColor,
+  };
+
+  vk::RenderingInfo renderingInfo = {
+    .renderArea = {.offset = {0, 0}, .extent = mSwapChainDetails.extent},
+    .layerCount = 1,
+    .colorAttachmentCount = 1,
+    .pColorAttachments = &attachmentInfo,
+  };
+
+  mCommandBuffer.beginRendering(renderingInfo);
+
+  mCommandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, mGraphicsPipeline);
+
+  mCommandBuffer.setViewport(
+    0, vk::Viewport{0.0f, 0.0f, static_cast<float>(mSwapChainDetails.extent.width), static_cast<float>(mSwapChainDetails.extent.height), 0.0f, 1.0f});
+  mCommandBuffer.setScissor(0, vk::Rect2D(vk::Offset2D(0, 0), mSwapChainDetails.extent));
+
+  mCommandBuffer.draw(3, 1, 0, 0);
+
+  mCommandBuffer.endRendering();
+
+  transition_image_layout(mSwapChainImages[imageIdx],
+                          mCommandBuffer,
+                          vk::ImageLayout::eColorAttachmentOptimal,
+                          vk::ImageLayout::ePresentSrcKHR,
+                          vk::AccessFlagBits2::eColorAttachmentWrite,
+                          {},
+                          vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+                          vk::PipelineStageFlagBits2::eBottomOfPipe);
+  mCommandBuffer.end();
 }
 
 }  // namespace maple

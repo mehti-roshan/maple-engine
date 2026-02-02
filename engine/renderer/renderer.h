@@ -58,5 +58,6 @@ class Renderer {
   void createGraphicsPipeline();
   void createCommandPool();
   void createCommandBuffer();
+  void recordCommandBuffer(uint32_t imageIdx);
 };
 }  // namespace maple
