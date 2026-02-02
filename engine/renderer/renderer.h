@@ -44,6 +44,8 @@ class Renderer {
   SwapChainDetails mSwapChainDetails;
   std::vector<vk::Image> mSwapChainImages;
   std::vector<vk::ImageView> mSwapChainImageViews;
+  vk::raii::PipelineLayout mPipelineLayout = nullptr;
+  vk::raii::Pipeline mGraphicsPipeline = nullptr;
 
   void createInstance(const std::vector<const char*>& glfwExtensions);
   void setupDebugMessenger();
@@ -51,5 +53,6 @@ class Renderer {
   void createLogicalDevice();
   void createSwapChain();
   void createImageViews();
+  void createGraphicsPipeline();
 };
 }  // namespace maple

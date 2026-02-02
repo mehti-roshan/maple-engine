@@ -135,6 +135,15 @@ vk::Extent2D chooseSwapExtent(const vk::SurfaceCapabilitiesKHR& capabilities, Fr
           std::clamp(height, capabilities.minImageExtent.height, capabilities.maxImageExtent.height)};
 }
 
+[[nodiscard]] vk::raii::ShaderModule createShaderModule(vk::raii::Device& device, const std::vector<char>& code) {
+  vk::ShaderModuleCreateInfo createInfo{
+    .codeSize = code.size(),
+    .pCode = reinterpret_cast<const uint32_t*>(code.data()),
+  };
+
+  return vk::raii::ShaderModule(device, createInfo);
+}
+
 namespace maple {
 void Renderer::Init(const std::vector<const char*>& glfwExtensions, SurfaceCreateCallback surfaceCallback, FrameBufferSizeCallback fbCallback) {
   mFrameBufferSizeCallback = fbCallback;
@@ -308,6 +317,78 @@ void Renderer::createImageViews() {
     imageViewCreateInfo.image = image;
     mSwapChainImageViews.emplace_back(mDevice.createImageView(imageViewCreateInfo));
   }
+}
+
+void Renderer::createGraphicsPipeline() {
+  auto shaderModule = createShaderModule(mDevice, file::ReadFile("assets/shaders/shader.slang"));
+
+  vk::PipelineShaderStageCreateInfo vertShaderStageInfo{.stage = vk::ShaderStageFlagBits::eVertex, .module = shaderModule, .pName = "vertMain"};
+  vk::PipelineShaderStageCreateInfo fragShaderStageInfo{.stage = vk::ShaderStageFlagBits::eFragment, .module = shaderModule, .pName = "fragMain"};
+  vk::PipelineShaderStageCreateInfo shaderStages[] = {vertShaderStageInfo, fragShaderStageInfo};
+
+  std::vector dynamicStates = {vk::DynamicState::eViewport, vk::DynamicState::eScissor};
+
+  vk::PipelineDynamicStateCreateInfo dynamicState{
+    .dynamicStateCount = static_cast<uint32_t>(dynamicStates.size()),
+    .pDynamicStates = dynamicStates.data(),
+  };
+
+  vk::PipelineVertexInputStateCreateInfo vertexInputInfo;
+
+  vk::PipelineInputAssemblyStateCreateInfo inputAssembly{.topology = vk::PrimitiveTopology::eTriangleList};
+
+  vk::Viewport viewport{
+    0.0f, 0.0f, static_cast<float>(mSwapChainDetails.extent.width), static_cast<float>(mSwapChainDetails.extent.height), 0.0f, 1.0f};
+  vk::Rect2D scissor{{0, 0}, mSwapChainDetails.extent};
+  vk::PipelineViewportStateCreateInfo viewportState{
+    .viewportCount = 1,
+    .pViewports = &viewport,
+    .scissorCount = 1,
+    .pScissors = &scissor,
+  };
+
+  vk::PipelineRasterizationStateCreateInfo rasterizer{
+    .depthClampEnable = vk::False,
+    .rasterizerDiscardEnable = vk::False,
+    .polygonMode = vk::PolygonMode::eFill,
+    .cullMode = vk::CullModeFlagBits::eBack,
+    .frontFace = vk::FrontFace::eClockwise,
+    .depthBiasEnable = vk::False,
+    .depthBiasSlopeFactor = 1.0f,
+    .lineWidth = 1.0f,
+  };
+
+  vk::PipelineMultisampleStateCreateInfo multisampling{.rasterizationSamples = vk::SampleCountFlagBits::e1, .sampleShadingEnable = vk::False};
+
+  vk::PipelineColorBlendAttachmentState colorBlendAttachment{
+    .blendEnable = vk::False,
+    .colorWriteMask =
+      vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG | vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA,
+  };
+
+  vk::PipelineColorBlendStateCreateInfo colorBlending{
+    .logicOpEnable = vk::False, .logicOp = vk::LogicOp::eCopy, .attachmentCount = 1, .pAttachments = &colorBlendAttachment};
+
+  vk::PipelineLayoutCreateInfo pipelineLayoutInfo{.setLayoutCount = 0, .pushConstantRangeCount = 0};
+  mPipelineLayout = vk::raii::PipelineLayout(mDevice, pipelineLayoutInfo);
+
+  vk::PipelineRenderingCreateInfo pipelineRenderingCreateInfo{.colorAttachmentCount = 1, .pColorAttachmentFormats = &mSwapChainDetails.format.format};
+  vk::GraphicsPipelineCreateInfo pipelineInfo{
+    .pNext = &pipelineRenderingCreateInfo,
+    .stageCount = 2,
+    .pStages = shaderStages,
+    .pVertexInputState = &vertexInputInfo,
+    .pInputAssemblyState = &inputAssembly,
+    .pViewportState = &viewportState,
+    .pRasterizationState = &rasterizer,
+    .pMultisampleState = &multisampling,
+    .pColorBlendState = &colorBlending,
+    .pDynamicState = &dynamicState,
+    .layout = mPipelineLayout,
+    .renderPass = nullptr,
+  };
+
+  mGraphicsPipeline = vk::raii::Pipeline(mDevice, nullptr, pipelineInfo);
 }
 
 }  // namespace maple
