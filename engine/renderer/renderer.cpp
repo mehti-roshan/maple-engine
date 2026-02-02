@@ -68,8 +68,8 @@ void Renderer::createInstance(const std::vector<const char*>& glfwExtensions) {
       .pApplicationInfo = &appInfo,
       .enabledLayerCount = static_cast<uint32_t>(requiredLayers.size()),
       .ppEnabledLayerNames = requiredLayers.data(),
-      .enabledExtensionCount = static_cast<uint32_t>(glfwExtensions.size()),
-      .ppEnabledExtensionNames = glfwExtensions.data(),
+      .enabledExtensionCount = static_cast<uint32_t>(requiredExtensions.size()),
+      .ppEnabledExtensionNames = requiredExtensions.data(),
   };
 
   mInstance = vk::raii::Instance(mContext, createInfo);
