@@ -38,6 +38,7 @@ class Renderer {
  private:
   FrameBufferSizeCallback mFrameBufferSizeCallback;
   bool mFrameBufferResized = false;
+  uint32_t mFrameIdx = 0;
 
   vk::raii::Context mContext;
   vk::raii::Instance mInstance = nullptr;
@@ -56,11 +57,11 @@ class Renderer {
   vk::raii::Pipeline mGraphicsPipeline = nullptr;
 
   vk::raii::CommandPool mCommandPool = nullptr;
-  vk::raii::CommandBuffer mCommandBuffer = nullptr;
+  std::vector<vk::raii::CommandBuffer> mCommandBuffers;
 
-  vk::raii::Semaphore mPresentCompleteSem = nullptr;
-  vk::raii::Semaphore mRenderCompleteSem = nullptr;
-  vk::raii::Fence mDrawFence = nullptr;
+  std::vector<vk::raii::Semaphore> mPresentCompleteSems;
+  std::vector<vk::raii::Semaphore> mRenderCompleteSems;
+  std::vector<vk::raii::Fence> mDrawFences;
 
   void createInstance(const std::vector<const char*>& glfwExtensions);
   void setupDebugMessenger();
@@ -70,7 +71,7 @@ class Renderer {
   void createImageViews();
   void createGraphicsPipeline();
   void createCommandPool();
-  void createCommandBuffer();
+  void createCommandBuffers();
   void recordCommandBuffer(uint32_t imageIdx);
   void createSyncObjects();
 };

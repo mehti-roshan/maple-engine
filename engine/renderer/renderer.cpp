@@ -3,6 +3,7 @@
 #include <engine/renderer/renderer.h>
 
 #include <algorithm>
+#include <cassert>
 #include <cstdint>
 #include <cstring>
 #include <map>
@@ -34,6 +35,8 @@ static VKAPI_ATTR vk::Bool32 VKAPI_CALL debugCallback(vk::DebugUtilsMessageSever
   MAPLE_DEBUG("Vulkan validation layer: type {} msg: {}", to_string(type), pCallbackData->pMessage);
   return vk::False;
 }
+
+constexpr int MAX_FRAMES_IN_FLIGHT = 2;
 
 bool deviceSupportsExtension(vk::raii::PhysicalDevice device, const char* extensionName) {
   auto extensions = device.enumerateDeviceExtensionProperties();
@@ -185,40 +188,43 @@ void Renderer::Init(const std::vector<const char*>& glfwExtensions, SurfaceCreat
   createImageViews();
   createGraphicsPipeline();
   createCommandPool();
-  createCommandBuffer();
+  createCommandBuffers();
   createSyncObjects();
 }
 
 void Renderer::DrawFrame() {
-  auto fenceResult = mDevice.waitForFences(*mDrawFence, vk::True, UINT64_MAX);
-
-  auto [result, imageIdx] = mSwapChain.acquireNextImage(UINT64_MAX, *mPresentCompleteSem, nullptr);
+  auto fenceResult = mDevice.waitForFences(*mDrawFences[mFrameIdx], vk::True, UINT64_MAX);
+  auto [result, imageIdx] = mSwapChain.acquireNextImage(UINT64_MAX, *mPresentCompleteSems[mFrameIdx], nullptr);
+  
+  mCommandBuffers[mFrameIdx].reset();
   recordCommandBuffer(imageIdx);
 
-  mDevice.resetFences(*mDrawFence);
+  mDevice.resetFences(*mDrawFences[mFrameIdx]);
 
   vk::PipelineStageFlags waitDestinationStageMask(vk::PipelineStageFlagBits::eColorAttachmentOutput);
   const vk::SubmitInfo submitInfo{
     .waitSemaphoreCount = 1,
-    .pWaitSemaphores = &*mPresentCompleteSem,
+    .pWaitSemaphores = &*mPresentCompleteSems[mFrameIdx],
     .pWaitDstStageMask = &waitDestinationStageMask,
     .commandBufferCount = 1,
-    .pCommandBuffers = &*mCommandBuffer,
+    .pCommandBuffers = &*mCommandBuffers[mFrameIdx],
     .signalSemaphoreCount = 1,
-    .pSignalSemaphores = &*mRenderCompleteSem,
+    .pSignalSemaphores = &*mRenderCompleteSems[mFrameIdx],
   };
 
-  mGraphicsQueue.submit(submitInfo, *mDrawFence);
+  mGraphicsQueue.submit(submitInfo, *mDrawFences[mFrameIdx]);
 
   const vk::PresentInfoKHR presentInfoKHR{
     .waitSemaphoreCount = 1,
-    .pWaitSemaphores = &*mRenderCompleteSem,
+    .pWaitSemaphores = &*mRenderCompleteSems[mFrameIdx],
     .swapchainCount = 1,
     .pSwapchains = &*mSwapChain,
     .pImageIndices = &imageIdx,
   };
 
   auto presentResult = mPresentQueue.presentKHR(presentInfoKHR);
+
+  mFrameIdx = (mFrameIdx + 1) % MAX_FRAMES_IN_FLIGHT;
 }
 
 void Renderer::createInstance(const std::vector<const char*>& glfwExtensions) {
@@ -473,20 +479,22 @@ void Renderer::createCommandPool() {
   mCommandPool = vk::raii::CommandPool(mDevice, poolInfo);
 }
 
-void Renderer::createCommandBuffer() {
+void Renderer::createCommandBuffers() {
+  mCommandBuffers.clear();
+
   vk::CommandBufferAllocateInfo allocInfo{
     .commandPool = mCommandPool,
     .level = vk::CommandBufferLevel::ePrimary,
-    .commandBufferCount = 1,
+    .commandBufferCount = static_cast<uint32_t>(mSwapChainImages.size()),
   };
 
-  mCommandBuffer = std::move(vk::raii::CommandBuffers(mDevice, allocInfo).front());
+  mCommandBuffers = vk::raii::CommandBuffers(mDevice, allocInfo);
 }
 
 void Renderer::recordCommandBuffer(uint32_t imageIdx) {
-  mCommandBuffer.begin({});
+  mCommandBuffers[mFrameIdx].begin({});
   transition_image_layout(mSwapChainImages[imageIdx],
-                          mCommandBuffer,
+                          mCommandBuffers[mFrameIdx],
                           vk::ImageLayout::eUndefined,
                           vk::ImageLayout::eColorAttachmentOptimal,
                           {},
@@ -510,36 +518,40 @@ void Renderer::recordCommandBuffer(uint32_t imageIdx) {
     .pColorAttachments = &attachmentInfo,
   };
 
-  mCommandBuffer.beginRendering(renderingInfo);
+  mCommandBuffers[mFrameIdx].beginRendering(renderingInfo);
 
-  mCommandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, mGraphicsPipeline);
+  mCommandBuffers[mFrameIdx].bindPipeline(vk::PipelineBindPoint::eGraphics, mGraphicsPipeline);
 
-  mCommandBuffer.setViewport(
+  mCommandBuffers[mFrameIdx].setViewport(
     0, vk::Viewport{0.0f, 0.0f, static_cast<float>(mSwapChainDetails.extent.width), static_cast<float>(mSwapChainDetails.extent.height), 0.0f, 1.0f});
-  mCommandBuffer.setScissor(0, vk::Rect2D(vk::Offset2D(0, 0), mSwapChainDetails.extent));
+  mCommandBuffers[mFrameIdx].setScissor(0, vk::Rect2D(vk::Offset2D(0, 0), mSwapChainDetails.extent));
 
-  mCommandBuffer.draw(3, 1, 0, 0);
+  mCommandBuffers[mFrameIdx].draw(3, 1, 0, 0);
 
-  mCommandBuffer.endRendering();
+  mCommandBuffers[mFrameIdx].endRendering();
 
   transition_image_layout(mSwapChainImages[imageIdx],
-                          mCommandBuffer,
+                          mCommandBuffers[mFrameIdx],
                           vk::ImageLayout::eColorAttachmentOptimal,
                           vk::ImageLayout::ePresentSrcKHR,
                           vk::AccessFlagBits2::eColorAttachmentWrite,
                           {},
                           vk::PipelineStageFlagBits2::eColorAttachmentOutput,
                           vk::PipelineStageFlagBits2::eBottomOfPipe);
-  mCommandBuffer.end();
+  mCommandBuffers[mFrameIdx].end();
 }
 
 void Renderer::createSyncObjects() {
-  vk::SemaphoreCreateInfo semaphoreInfo;
-  vk::FenceCreateInfo fenceInfo{.flags = vk::FenceCreateFlagBits::eSignaled};
+  assert(mPresentCompleteSems.empty() && mRenderCompleteSems.empty() && mDrawFences.empty());
 
-  mPresentCompleteSem = vk::raii::Semaphore(mDevice, semaphoreInfo);
-  mRenderCompleteSem = vk::raii::Semaphore(mDevice, semaphoreInfo);
-  mDrawFence = vk::raii::Fence(mDevice, fenceInfo);
+  for (size_t i = 0; i < mSwapChainImages.size(); i++) {
+    mRenderCompleteSems.emplace_back(mDevice, vk::SemaphoreCreateInfo{});
+  }
+
+  for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+    mPresentCompleteSems.emplace_back(mDevice, vk::SemaphoreCreateInfo{});
+    mDrawFences.emplace_back(mDevice, vk::FenceCreateInfo{.flags = vk::FenceCreateFlagBits::eSignaled});
+  }
 }
 
 }  // namespace maple
