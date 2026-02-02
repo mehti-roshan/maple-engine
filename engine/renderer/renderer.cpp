@@ -152,6 +152,11 @@ void Renderer::Init(const std::vector<const char*>& glfwExtensions, SurfaceCreat
   mSurface = vk::raii::SurfaceKHR(mInstance, surfaceCallback(*mInstance));
   pickPhysicalDevice();
   createLogicalDevice();
+  createSwapChain();
+  createImageViews();
+  createGraphicsPipeline();
+  createCommandPool();
+  createCommandBuffer();
 }
 
 void Renderer::createInstance(const std::vector<const char*>& glfwExtensions) {
@@ -320,7 +325,7 @@ void Renderer::createImageViews() {
 }
 
 void Renderer::createGraphicsPipeline() {
-  auto shaderModule = createShaderModule(mDevice, file::ReadFile("assets/shaders/shader.slang"));
+  auto shaderModule = createShaderModule(mDevice, file::ReadFile("assets/shaders/slang.spv"));
 
   vk::PipelineShaderStageCreateInfo vertShaderStageInfo{.stage = vk::ShaderStageFlagBits::eVertex, .module = shaderModule, .pName = "vertMain"};
   vk::PipelineShaderStageCreateInfo fragShaderStageInfo{.stage = vk::ShaderStageFlagBits::eFragment, .module = shaderModule, .pName = "fragMain"};
@@ -389,6 +394,27 @@ void Renderer::createGraphicsPipeline() {
   };
 
   mGraphicsPipeline = vk::raii::Pipeline(mDevice, nullptr, pipelineInfo);
+}
+
+void Renderer::createCommandPool() {
+  QueueFamilyIndices qIndices = getDeviceQueueFamilyIndices(mPhysicalDevice, *mSurface);
+
+  vk::CommandPoolCreateInfo poolInfo{
+    .flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
+    .queueFamilyIndex = qIndices.graphics,
+  };
+
+  mCommandPool = vk::raii::CommandPool(mDevice, poolInfo);
+}
+
+void Renderer::createCommandBuffer() {
+  vk::CommandBufferAllocateInfo allocInfo{
+    .commandPool = mCommandPool,
+    .level = vk::CommandBufferLevel::ePrimary,
+    .commandBufferCount = 1,
+  };
+
+  mCommandBuffer = std::move(vk::raii::CommandBuffers(mDevice, allocInfo).front());
 }
 
 }  // namespace maple

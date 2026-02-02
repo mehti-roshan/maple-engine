@@ -46,6 +46,8 @@ class Renderer {
   std::vector<vk::ImageView> mSwapChainImageViews;
   vk::raii::PipelineLayout mPipelineLayout = nullptr;
   vk::raii::Pipeline mGraphicsPipeline = nullptr;
+  vk::raii::CommandPool mCommandPool = nullptr;
+  vk::raii::CommandBuffer mCommandBuffer = nullptr;
 
   void createInstance(const std::vector<const char*>& glfwExtensions);
   void setupDebugMessenger();
@@ -54,5 +56,7 @@ class Renderer {
   void createSwapChain();
   void createImageViews();
   void createGraphicsPipeline();
+  void createCommandPool();
+  void createCommandBuffer();
 };
 }  // namespace maple
