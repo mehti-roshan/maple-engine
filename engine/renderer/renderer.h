@@ -43,11 +43,13 @@ class Renderer {
   vk::raii::SwapchainKHR mSwapChain = nullptr;
   SwapChainDetails mSwapChainDetails;
   std::vector<vk::Image> mSwapChainImages;
+  std::vector<vk::ImageView> mSwapChainImageViews;
 
   void createInstance(const std::vector<const char*>& glfwExtensions);
   void setupDebugMessenger();
   void pickPhysicalDevice();
   void createLogicalDevice();
   void createSwapChain();
+  void createImageViews();
 };
 }  // namespace maple

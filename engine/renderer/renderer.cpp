@@ -288,4 +288,26 @@ void Renderer::createSwapChain() {
   mSwapChainImages = mSwapChain.getImages();
 }
 
+void Renderer::createImageViews() {
+  mSwapChainImageViews.clear();
+
+  vk::ImageViewCreateInfo imageViewCreateInfo{
+    .viewType = vk::ImageViewType::e2D,
+    .format = mSwapChainDetails.format.format,
+    .components =
+      {
+        vk::ComponentSwizzle::eIdentity,
+        vk::ComponentSwizzle::eIdentity,
+        vk::ComponentSwizzle::eIdentity,
+        vk::ComponentSwizzle::eIdentity,
+      },
+    .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1},
+  };
+
+  for (const auto& image : mSwapChainImages) {
+    imageViewCreateInfo.image = image;
+    mSwapChainImageViews.emplace_back(mDevice.createImageView(imageViewCreateInfo));
+  }
+}
+
 }  // namespace maple
