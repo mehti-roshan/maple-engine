@@ -71,7 +71,8 @@ QueueFamilyIndices getDeviceQueueFamilyIndices(vk::raii::PhysicalDevice device, 
 bool isPhysicalDeviceSuitable(vk::raii::PhysicalDevice device, vk::SurfaceKHR surface) {
   if (device.getProperties().apiVersion < VK_API_VERSION_1_3) return false;
 
-  auto featureChain = device.getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan13Features, vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>();
+  auto featureChain =
+    device.getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan13Features, vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>();
   auto vk13Features = featureChain.get<vk::PhysicalDeviceVulkan13Features>();
   auto extDynStateFeatures = featureChain.get<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>();
 
@@ -104,6 +105,34 @@ float scorePhysicalDevice(vk::raii::PhysicalDevice device, QueueFamilyIndices qI
   if (qIndices.graphics != qIndices.present) score += 500.0f;
 
   return score;
+}
+
+vk::SurfaceFormatKHR chooseSwapSurfaceFormat(const std::vector<vk::SurfaceFormatKHR>& availableFormats) {
+  for (const auto& availableFormat : availableFormats)
+    if (availableFormat.format == vk::Format::eB8G8R8A8Srgb && availableFormat.colorSpace == vk::ColorSpaceKHR::eSrgbNonlinear)
+      return availableFormat;
+
+  return availableFormats[0];
+}
+
+vk::PresentModeKHR chooseSwapPresentMode(const std::vector<vk::PresentModeKHR>& availablePresentModes) {
+  for (const auto& availablePresentMode : availablePresentModes) {
+    if (availablePresentMode == vk::PresentModeKHR::eMailbox) {
+      return availablePresentMode;
+    }
+  }
+  return vk::PresentModeKHR::eFifo;
+}
+
+vk::Extent2D chooseSwapExtent(const vk::SurfaceCapabilitiesKHR& capabilities, FrameBufferSizeCallback fbCallback) {
+  if (capabilities.currentExtent.width != std::numeric_limits<uint32_t>::max()) {
+    return capabilities.currentExtent;
+  }
+  uint32_t width, height;
+  fbCallback(width, height);
+
+  return {std::clamp(width, capabilities.minImageExtent.width, capabilities.maxImageExtent.width),
+          std::clamp(height, capabilities.minImageExtent.height, capabilities.maxImageExtent.height)};
 }
 
 namespace maple {
@@ -189,7 +218,7 @@ void Renderer::pickPhysicalDevice() {
 void Renderer::createLogicalDevice() {
   // std::vector<vk::QueueFamilyProperties> queueFamilyProperties = mPhysicalDevice.getQueueFamilyProperties();
   QueueFamilyIndices qIndices = getDeviceQueueFamilyIndices(mPhysicalDevice, *mSurface);
-  
+
   float queuePriority = 0.5f;
   vk::DeviceQueueCreateInfo deviceQueueCreateInfo{.queueFamilyIndex = qIndices.graphics, .queueCount = 1, .pQueuePriorities = &queuePriority};
 
@@ -214,6 +243,49 @@ void Renderer::createLogicalDevice() {
 
   mGraphicsQueue = vk::raii::Queue(mDevice, qIndices.graphics, 0);
   mPresentQueue = qIndices.graphics == qIndices.present ? mGraphicsQueue : vk::raii::Queue(mDevice, qIndices.present, 0);
+}
+
+void Renderer::createSwapChain() {
+  auto surfaceCapabilities = mPhysicalDevice.getSurfaceCapabilitiesKHR(*mSurface);
+  mSwapChainDetails.format = chooseSwapSurfaceFormat(mPhysicalDevice.getSurfaceFormatsKHR(*mSurface));
+  mSwapChainDetails.extent = chooseSwapExtent(surfaceCapabilities, mFrameBufferSizeCallback);
+
+  auto minImageCount = std::max(3u, surfaceCapabilities.minImageCount);
+  minImageCount =
+    (surfaceCapabilities.maxImageCount > 0 && minImageCount > surfaceCapabilities.maxImageCount) ? surfaceCapabilities.maxImageCount : minImageCount;
+
+  vk::SwapchainCreateInfoKHR swapChainCreateInfo{
+    .flags = vk::SwapchainCreateFlagsKHR(),
+    .surface = *mSurface,
+    .minImageCount = minImageCount,
+    .imageFormat = mSwapChainDetails.format.format,
+    .imageColorSpace = mSwapChainDetails.format.colorSpace,
+    .imageExtent = mSwapChainDetails.extent,
+    .imageArrayLayers = 1,
+    .imageUsage = vk::ImageUsageFlagBits::eColorAttachment,
+    .imageSharingMode = vk::SharingMode::eExclusive,
+    .preTransform = surfaceCapabilities.currentTransform,
+    .compositeAlpha = vk::CompositeAlphaFlagBitsKHR::eOpaque,
+    .presentMode = chooseSwapPresentMode(mPhysicalDevice.getSurfacePresentModesKHR(*mSurface)),
+    .clipped = true,
+    .oldSwapchain = nullptr,
+  };
+
+  QueueFamilyIndices qIndices = getDeviceQueueFamilyIndices(mPhysicalDevice, *mSurface);
+  uint32_t queueFamilyIndices[] = {qIndices.graphics, qIndices.present};
+
+  if (qIndices.graphics != qIndices.present) {
+    swapChainCreateInfo.imageSharingMode = vk::SharingMode::eConcurrent;
+    swapChainCreateInfo.queueFamilyIndexCount = 2;
+    swapChainCreateInfo.pQueueFamilyIndices = queueFamilyIndices;
+  } else {
+    swapChainCreateInfo.imageSharingMode = vk::SharingMode::eExclusive;
+    swapChainCreateInfo.queueFamilyIndexCount = 0;      // Optional
+    swapChainCreateInfo.pQueueFamilyIndices = nullptr;  // Optional
+  }
+
+  mSwapChain = vk::raii::SwapchainKHR(mDevice, swapChainCreateInfo);
+  mSwapChainImages = mSwapChain.getImages();
 }
 
 }  // namespace maple

@@ -16,6 +16,11 @@ using SurfaceCreateCallback = std::function<VkSurfaceKHR(VkInstance)>;
 // query the framebuffer size from the window library
 using FrameBufferSizeCallback = std::function<void(uint32_t&, uint32_t&)>;
 
+struct SwapChainDetails {
+  vk::SurfaceFormatKHR format;
+  vk::Extent2D extent;
+};
+
 namespace maple {
 
 class Renderer {
@@ -35,10 +40,14 @@ class Renderer {
   vk::raii::Queue mGraphicsQueue = nullptr;
   vk::raii::Queue mPresentQueue = nullptr;
   vk::raii::SurfaceKHR mSurface = nullptr;
+  vk::raii::SwapchainKHR mSwapChain = nullptr;
+  SwapChainDetails mSwapChainDetails;
+  std::vector<vk::Image> mSwapChainImages;
 
   void createInstance(const std::vector<const char*>& glfwExtensions);
   void setupDebugMessenger();
   void pickPhysicalDevice();
   void createLogicalDevice();
+  void createSwapChain();
 };
 }  // namespace maple
