@@ -3,8 +3,14 @@
 #include <engine/renderer/renderer.h>
 
 #include <algorithm>
-#include <array>
-#include <chrono>
+#include <cstdint>
+#include <cstring>
+#include <map>
+#include <utility>
+#include <vector>
+#include <vulkan/vulkan_handles.hpp>
+#include <vulkan/vulkan_raii.hpp>
+#include <vulkan/vulkan_structs.hpp>
 #define GLM_FORCE_RADIANS
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -22,17 +28,92 @@ std::vector<const char*> deviceExtensions = {vk::KHRSwapchainExtensionName};
 
 static VKAPI_ATTR vk::Bool32 VKAPI_CALL debugCallback(vk::DebugUtilsMessageSeverityFlagBitsEXT severity,
                                                       vk::DebugUtilsMessageTypeFlagsEXT type,
-                                                      const vk::DebugUtilsMessengerCallbackDataEXT* pCallbackData, void*) {
+                                                      const vk::DebugUtilsMessengerCallbackDataEXT* pCallbackData,
+                                                      void*) {
   MAPLE_DEBUG("Vulkan validation layer: type {} msg: {}", to_string(type), pCallbackData->pMessage);
   return vk::False;
 }
 
+bool deviceSupportsExtension(vk::raii::PhysicalDevice device, const char* extensionName) {
+  auto extensions = device.enumerateDeviceExtensionProperties();
+  for (auto const& ext : extensions)
+    if (strcmp(ext.extensionName, extensionName) == 0) return true;
+  return false;
+}
+
+struct QueueFamilyIndices {
+  uint32_t graphics, present, compute;
+  bool hasGraphics() { return graphics != VK_QUEUE_FAMILY_IGNORED; }
+  bool hasPresent() { return present != VK_QUEUE_FAMILY_IGNORED; }
+  bool hasCompute() { return compute != VK_QUEUE_FAMILY_IGNORED; }
+  bool complete() { return hasGraphics() && hasPresent() && hasCompute(); }
+};
+
+QueueFamilyIndices getDeviceQueueFamilyIndices(vk::raii::PhysicalDevice device, vk::SurfaceKHR surface) {
+  QueueFamilyIndices indices = {VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED};
+
+  for (auto [i, qfp] : std::views::enumerate(device.getQueueFamilyProperties())) {
+    bool graphics = static_cast<bool>(qfp.queueFlags & vk::QueueFlagBits::eGraphics);
+    indices.graphics = graphics && !indices.hasGraphics() ? static_cast<uint32_t>(i) : indices.graphics;
+
+    bool present = device.getSurfaceSupportKHR(i, surface);
+    indices.present = present && !indices.hasPresent() ? static_cast<uint32_t>(i) : indices.present;
+
+    bool compute = static_cast<bool>(qfp.queueFlags & vk::QueueFlagBits::eCompute);
+    indices.compute = compute && !indices.hasCompute() ? static_cast<uint32_t>(i) : indices.compute;
+
+    if (indices.complete()) break;
+  }
+
+  return indices;
+}
+
+bool isPhysicalDeviceSuitable(vk::raii::PhysicalDevice device, vk::SurfaceKHR surface) {
+  if (device.getProperties().apiVersion < VK_API_VERSION_1_3) return false;
+
+  auto featureChain = device.getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan13Features, vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>();
+  auto vk13Features = featureChain.get<vk::PhysicalDeviceVulkan13Features>();
+  auto extDynStateFeatures = featureChain.get<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>();
+
+  if (!vk13Features.dynamicRendering || !extDynStateFeatures.extendedDynamicState) return false;
+
+  auto extensions = device.enumerateDeviceExtensionProperties();
+  for (auto ext : deviceExtensions)
+    if (!deviceSupportsExtension(device, ext)) return false;
+
+  auto qIndices = getDeviceQueueFamilyIndices(device, surface);
+  if (!qIndices.complete()) return false;
+
+  return true;
+}
+
+float scorePhysicalDevice(vk::raii::PhysicalDevice device, QueueFamilyIndices qIndices) {
+  float score = 0.0f;
+
+  auto deviceProperties = device.getProperties2();
+  deviceProperties.properties.deviceType == vk::PhysicalDeviceType::eDiscreteGpu ? score += 1000.0f : score += 0.0f;
+
+  auto devMemProps = device.getMemoryProperties2();
+  uint32_t vramBytes = 0;
+  for (auto const& memHeap : devMemProps.memoryProperties.memoryHeaps)
+    if (memHeap.flags & vk::MemoryHeapFlagBits::eDeviceLocal) vramBytes += memHeap.size;
+  score += (float)vramBytes / 1024 / 1024;  // in MB
+
+  score += static_cast<float>(deviceProperties.properties.limits.maxImageDimension2D);
+
+  if (qIndices.graphics != qIndices.present) score += 500.0f;
+
+  return score;
+}
+
 namespace maple {
-void Renderer::Init(const std::vector<const char*>& glfwExtensions, SurfaceCreateCallback surfaceCallback,
-                    FrameBufferSizeCallback fbCallback) {
+void Renderer::Init(const std::vector<const char*>& glfwExtensions, SurfaceCreateCallback surfaceCallback, FrameBufferSizeCallback fbCallback) {
   mFrameBufferSizeCallback = fbCallback;
   createInstance(glfwExtensions);
   setupDebugMessenger();
+  mSurface = vk::raii::SurfaceKHR(mInstance, surfaceCallback(*mInstance));
+  pickPhysicalDevice();
+  createLogicalDevice();
 }
 
 void Renderer::createInstance(const std::vector<const char*>& glfwExtensions) {
@@ -52,24 +133,24 @@ void Renderer::createInstance(const std::vector<const char*>& glfwExtensions) {
 
   auto layerProperties = mContext.enumerateInstanceLayerProperties();
   if (std::ranges::any_of(requiredLayers, [&layerProperties](auto const& requiredLayer) {
-        return std::ranges::none_of(
-            layerProperties, [requiredLayer](auto const& layerProperty) { return strcmp(layerProperty.layerName, requiredLayer) == 0; });
+        return std::ranges::none_of(layerProperties,
+                                    [requiredLayer](auto const& layerProperty) { return strcmp(layerProperty.layerName, requiredLayer) == 0; });
       }))
     MAPLE_FATAL("One or more required layers not supported");
 
   constexpr vk::ApplicationInfo appInfo{
-      .applicationVersion = VK_MAKE_VERSION(1, 0, 0),
-      .pEngineName = "Maple",
-      .engineVersion = VK_MAKE_VERSION(1, 0, 0),
-      .apiVersion = vk::ApiVersion14,
+    .applicationVersion = VK_MAKE_VERSION(1, 0, 0),
+    .pEngineName = "Maple",
+    .engineVersion = VK_MAKE_VERSION(1, 0, 0),
+    .apiVersion = vk::ApiVersion14,
   };
 
   vk::InstanceCreateInfo createInfo{
-      .pApplicationInfo = &appInfo,
-      .enabledLayerCount = static_cast<uint32_t>(requiredLayers.size()),
-      .ppEnabledLayerNames = requiredLayers.data(),
-      .enabledExtensionCount = static_cast<uint32_t>(requiredExtensions.size()),
-      .ppEnabledExtensionNames = requiredExtensions.data(),
+    .pApplicationInfo = &appInfo,
+    .enabledLayerCount = static_cast<uint32_t>(requiredLayers.size()),
+    .ppEnabledLayerNames = requiredLayers.data(),
+    .enabledExtensionCount = static_cast<uint32_t>(requiredExtensions.size()),
+    .ppEnabledExtensionNames = requiredExtensions.data(),
   };
 
   mInstance = vk::raii::Instance(mContext, createInfo);
@@ -85,68 +166,54 @@ void Renderer::setupDebugMessenger() {
                                                      vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance |
                                                      vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation);
   vk::DebugUtilsMessengerCreateInfoEXT debugUtilsMessengerCreateInfoEXT{
-      .messageSeverity = severityFlags, .messageType = messageTypeFlags, .pfnUserCallback = &debugCallback};
+    .messageSeverity = severityFlags, .messageType = messageTypeFlags, .pfnUserCallback = &debugCallback};
   mDebugMessenger = mInstance.createDebugUtilsMessengerEXT(debugUtilsMessengerCreateInfoEXT);
 }
 
 void Renderer::pickPhysicalDevice() {
-  std::vector<vk::raii::PhysicalDevice> devices = mInstance.enumeratePhysicalDevices();
-  const auto devIter = std::ranges::find_if(devices, [&](auto const& device) {
-    auto queueFamilies = device.getQueueFamilyProperties();
-    bool isSuitable = device.getProperties().apiVersion >= VK_API_VERSION_1_3;
+  auto devices = mInstance.enumeratePhysicalDevices();
+  std::map<float, vk::raii::PhysicalDevice> scoredDevices;
 
-    const auto qfpIter = std::ranges::find_if(queueFamilies, [](vk::QueueFamilyProperties const& qfp) {
-      return (qfp.queueFlags & vk::QueueFlagBits::eGraphics) != static_cast<vk::QueueFlags>(0);
-    });
-    isSuitable = isSuitable && (qfpIter != queueFamilies.end());
-    auto extensions = device.enumerateDeviceExtensionProperties();
-    bool found = true;
-    for (auto const& extension : deviceExtensions) {
-      auto extensionIter =
-          std::ranges::find_if(extensions, [extension](auto const& ext) { return strcmp(ext.extensionName, extension) == 0; });
-      found = found && extensionIter != extensions.end();
-    }
-    isSuitable = isSuitable && found;
-    if (isSuitable) mPhysicalDevice = device;
+  for (auto const& device : devices) {
+    if (!isPhysicalDeviceSuitable(vk::raii::PhysicalDevice(device), *mSurface)) continue;
+    auto qIndices = getDeviceQueueFamilyIndices(vk::raii::PhysicalDevice(device), *mSurface);
+    float score = scorePhysicalDevice(vk::raii::PhysicalDevice(device), qIndices);
+    scoredDevices.insert({score, vk::raii::PhysicalDevice(device)});
+  }
 
-    return isSuitable;
-  });
-  if (devIter == devices.end()) MAPLE_FATAL("Failed to find suitable GPU");
+  if (scoredDevices.empty()) MAPLE_FATAL("Failed to find a suitable GPU");
+
+  mPhysicalDevice = scoredDevices.rbegin()->second;
 }
 
 void Renderer::createLogicalDevice() {
-  vk::StructureChain<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan13Features, vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>
-      featureChain = {
-          {},                             // vk::PhysicalDeviceFeatures2 (empty for now)
-          {.dynamicRendering = true},     // Enable dynamic rendering from Vulkan 1.3
-          {.extendedDynamicState = true}  // Enable extended dynamic state from the extension
-      };
+  // std::vector<vk::QueueFamilyProperties> queueFamilyProperties = mPhysicalDevice.getQueueFamilyProperties();
+  QueueFamilyIndices qIndices = getDeviceQueueFamilyIndices(mPhysicalDevice, *mSurface);
+  
+  float queuePriority = 0.5f;
+  vk::DeviceQueueCreateInfo deviceQueueCreateInfo{.queueFamilyIndex = qIndices.graphics, .queueCount = 1, .pQueuePriorities = &queuePriority};
 
-  std::vector<vk::QueueFamilyProperties> queueFamilyProperties = mPhysicalDevice.getQueueFamilyProperties();
-  uint32_t graphicsIndex = findQueueFamilies(mPhysicalDevice);
-  vk::DeviceQueueCreateInfo deviceQueueCreateInfo{.queueFamilyIndex = graphicsIndex};
+  vk::StructureChain<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan13Features, vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>
+    featureChain = {
+      {},                             // vk::PhysicalDeviceFeatures2 (empty for now)
+      {.dynamicRendering = true},     // Enable dynamic rendering from Vulkan 1.3
+      {.extendedDynamicState = true}  // Enable extended dynamic state from the extension
+    };
 
   vk::DeviceCreateInfo deviceCreateInfo{
-      .pNext = &featureChain.get<vk::PhysicalDeviceFeatures2>(),
-      .queueCreateInfoCount = 1,
-      .pQueueCreateInfos = &deviceQueueCreateInfo,
-      .enabledExtensionCount = static_cast<uint32_t>(deviceExtensions.size()),
-      .ppEnabledExtensionNames = deviceExtensions.data(),
+    .pNext = &featureChain.get<vk::PhysicalDeviceFeatures2>(),
+    .queueCreateInfoCount = 1,
+    .pQueueCreateInfos = &deviceQueueCreateInfo,
+    .enabledExtensionCount = static_cast<uint32_t>(deviceExtensions.size()),
+    .ppEnabledExtensionNames = deviceExtensions.data(),
   };
 
   mDevice = vk::raii::Device(mPhysicalDevice, deviceCreateInfo);
-  mGraphicsQueue = vk::raii::Queue(mDevice, graphicsIndex, 0);
+
+  VkBool32 presentSupport = mPhysicalDevice.getSurfaceSupportKHR(qIndices.graphics, *mSurface);
+
+  mGraphicsQueue = vk::raii::Queue(mDevice, qIndices.graphics, 0);
+  mPresentQueue = qIndices.graphics == qIndices.present ? mGraphicsQueue : vk::raii::Queue(mDevice, qIndices.present, 0);
 }
 
-uint32_t Renderer::findQueueFamilies(vk::raii::PhysicalDevice physicalDevice) {
-  // find the index of the first queue family that supports graphics
-  std::vector<vk::QueueFamilyProperties> queueFamilyProperties = physicalDevice.getQueueFamilyProperties();
-
-  // get the first index into queueFamilyProperties which supports graphics
-  auto graphicsQueueFamilyProperty =
-      std::find_if(queueFamilyProperties.begin(), queueFamilyProperties.end(),
-                   [](vk::QueueFamilyProperties const& qfp) { return qfp.queueFlags & vk::QueueFlagBits::eGraphics; });
-
-  return static_cast<uint32_t>(std::distance(queueFamilyProperties.begin(), graphicsQueueFamilyProperty));
-}
 }  // namespace maple

@@ -33,12 +33,12 @@ class Renderer {
   vk::raii::PhysicalDevice mPhysicalDevice = nullptr;
   vk::raii::Device mDevice = nullptr;
   vk::raii::Queue mGraphicsQueue = nullptr;
+  vk::raii::Queue mPresentQueue = nullptr;
+  vk::raii::SurfaceKHR mSurface = nullptr;
 
   void createInstance(const std::vector<const char*>& glfwExtensions);
   void setupDebugMessenger();
   void pickPhysicalDevice();
   void createLogicalDevice();
-
-  uint32_t findQueueFamilies(vk::raii::PhysicalDevice physicalDevice);
 };
 }  // namespace maple
