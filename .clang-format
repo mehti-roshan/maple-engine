@@ -1,2 +1,8 @@
 BasedOnStyle: Google
 ColumnLimit: 150
+ContinuationIndentWidth: 2
+AlignOperands: DontAlign
+BreakBeforeBinaryOperators: None
+PenaltyBreakBeforeFirstCallParameter: 1
+BinPackArguments: false
+BinPackParameters: false
