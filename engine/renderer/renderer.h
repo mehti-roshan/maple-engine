@@ -74,5 +74,8 @@ class Renderer {
   void createCommandBuffers();
   void recordCommandBuffer(uint32_t imageIdx);
   void createSyncObjects();
+
+  void recreateSwapChain();
+  void cleanupSwapChain();
 };
 }  // namespace maple

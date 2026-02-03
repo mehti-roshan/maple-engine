@@ -195,12 +195,11 @@ void Renderer::Init(const std::vector<const char*>& glfwExtensions, SurfaceCreat
 void Renderer::DrawFrame() {
   auto fenceResult = mDevice.waitForFences(*mDrawFences[mFrameIdx], vk::True, UINT64_MAX);
   auto [result, imageIdx] = mSwapChain.acquireNextImage(UINT64_MAX, *mPresentCompleteSems[mFrameIdx], nullptr);
+  mDevice.resetFences(*mDrawFences[mFrameIdx]);
   
   mCommandBuffers[mFrameIdx].reset();
   recordCommandBuffer(imageIdx);
-
-  mDevice.resetFences(*mDrawFences[mFrameIdx]);
-
+  
   vk::PipelineStageFlags waitDestinationStageMask(vk::PipelineStageFlagBits::eColorAttachmentOutput);
   const vk::SubmitInfo submitInfo{
     .waitSemaphoreCount = 1,
@@ -223,6 +222,13 @@ void Renderer::DrawFrame() {
   };
 
   auto presentResult = mPresentQueue.presentKHR(presentInfoKHR);
+
+  if (presentResult == vk::Result::eErrorOutOfDateKHR || presentResult == vk::Result::eSuboptimalKHR || mFrameBufferResized) {
+    mFrameBufferResized = false;
+    recreateSwapChain();
+  } else if (presentResult != vk::Result::eSuccess) {
+    MAPLE_FATAL("Failed to present swap chain image");
+  }
 
   mFrameIdx = (mFrameIdx + 1) % MAX_FRAMES_IN_FLIGHT;
 }
@@ -552,6 +558,26 @@ void Renderer::createSyncObjects() {
     mPresentCompleteSems.emplace_back(mDevice, vk::SemaphoreCreateInfo{});
     mDrawFences.emplace_back(mDevice, vk::FenceCreateInfo{.flags = vk::FenceCreateFlagBits::eSignaled});
   }
+}
+
+void Renderer::cleanupSwapChain() {
+  mSwapChainImageViews.clear();
+  mSwapChain = nullptr;
+}
+
+void Renderer::recreateSwapChain() {
+  uint32_t width, height;
+  mFrameBufferSizeCallback(width, height);
+  while (width == 0 || height == 0) {
+    MAPLE_DEBUG("minimized...");
+    mFrameBufferSizeCallback(width, height);
+  }
+  mDevice.waitIdle();
+
+  cleanupSwapChain();
+
+  createSwapChain();
+  createImageViews();
 }
 
 }  // namespace maple
