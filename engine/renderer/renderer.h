@@ -63,6 +63,9 @@ class Renderer {
   std::vector<vk::raii::Semaphore> mRenderCompleteSems;
   std::vector<vk::raii::Fence> mDrawFences;
 
+  vk::raii::Buffer mVertexBuffer = nullptr;
+  vk::raii::DeviceMemory mVertexBufferMemory = nullptr;
+
   void createInstance(const std::vector<const char*>& glfwExtensions);
   void setupDebugMessenger();
   void pickPhysicalDevice();
@@ -71,11 +74,16 @@ class Renderer {
   void createImageViews();
   void createGraphicsPipeline();
   void createCommandPool();
+  void createVertexBuffer();
   void createCommandBuffers();
   void recordCommandBuffer(uint32_t imageIdx);
   void createSyncObjects();
 
   void recreateSwapChain();
   void cleanupSwapChain();
+
+  uint32_t findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties);
+  void createBuffer(vk::DeviceSize size, vk::BufferUsageFlags usage, vk::MemoryPropertyFlags properties, vk::raii::Buffer& buffer, vk::raii::DeviceMemory& bufferMemory);
+  void copyBuffer(vk::raii::Buffer & srcBuffer, vk::raii::Buffer & dstBuffer, vk::DeviceSize size);
 };
 }  // namespace maple

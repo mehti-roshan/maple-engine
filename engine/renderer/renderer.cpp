@@ -176,6 +176,23 @@ void transition_image_layout(vk::Image image,
   commandBuffer.pipelineBarrier2(dependencyInfo);
 }
 
+struct Vertex {
+  glm::vec2 pos;
+  glm::vec3 color;
+
+  static vk::VertexInputBindingDescription getBindingDescription() { return {0, sizeof(Vertex), vk::VertexInputRate::eVertex}; }
+  static std::array<vk::VertexInputAttributeDescription, 2> getAttributeDescriptions() {
+    return {vk::VertexInputAttributeDescription(0, 0, vk::Format::eR32G32Sfloat, offsetof(Vertex, pos)),
+            vk::VertexInputAttributeDescription(1, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, color))};
+  }
+};
+
+const std::vector<Vertex> vertices = {
+    {{0.0f, -0.5f}, {1.0f, 0.0f, 0.0f}},
+    {{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},
+    {{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}
+};
+
 namespace maple {
 void Renderer::Init(const std::vector<const char*>& glfwExtensions, SurfaceCreateCallback surfaceCallback, FrameBufferSizeCallback fbCallback) {
   mFrameBufferSizeCallback = fbCallback;
@@ -188,6 +205,7 @@ void Renderer::Init(const std::vector<const char*>& glfwExtensions, SurfaceCreat
   createImageViews();
   createGraphicsPipeline();
   createCommandPool();
+  createVertexBuffer();
   createCommandBuffers();
   createSyncObjects();
 }
@@ -196,10 +214,10 @@ void Renderer::DrawFrame() {
   auto fenceResult = mDevice.waitForFences(*mDrawFences[mFrameIdx], vk::True, UINT64_MAX);
   auto [result, imageIdx] = mSwapChain.acquireNextImage(UINT64_MAX, *mPresentCompleteSems[mFrameIdx], nullptr);
   mDevice.resetFences(*mDrawFences[mFrameIdx]);
-  
+
   mCommandBuffers[mFrameIdx].reset();
   recordCommandBuffer(imageIdx);
-  
+
   vk::PipelineStageFlags waitDestinationStageMask(vk::PipelineStageFlagBits::eColorAttachmentOutput);
   const vk::SubmitInfo submitInfo{
     .waitSemaphoreCount = 1,
@@ -416,7 +434,14 @@ void Renderer::createGraphicsPipeline() {
     .pDynamicStates = dynamicStates.data(),
   };
 
-  vk::PipelineVertexInputStateCreateInfo vertexInputInfo;
+  auto bindingDescription = Vertex::getBindingDescription();
+  auto attributeDescriptions = Vertex::getAttributeDescriptions();
+  vk::PipelineVertexInputStateCreateInfo vertexInputInfo{
+    .vertexBindingDescriptionCount = 1,
+    .pVertexBindingDescriptions = &bindingDescription,
+    .vertexAttributeDescriptionCount = attributeDescriptions.size(),
+    .pVertexAttributeDescriptions = attributeDescriptions.data(),
+  };
 
   vk::PipelineInputAssemblyStateCreateInfo inputAssembly{.topology = vk::PrimitiveTopology::eTriangleList};
 
@@ -485,6 +510,39 @@ void Renderer::createCommandPool() {
   mCommandPool = vk::raii::CommandPool(mDevice, poolInfo);
 }
 
+void Renderer::createVertexBuffer() {
+  vk::DeviceSize bufferSize = sizeof(vertices[0]) * vertices.size();
+
+  vk::BufferCreateInfo stagingInfo{.size = bufferSize, .usage = vk::BufferUsageFlagBits::eTransferSrc, .sharingMode = vk::SharingMode::eExclusive};
+  vk::raii::Buffer stagingBuffer(mDevice, stagingInfo);
+  vk::MemoryRequirements memRequirementsStaging = stagingBuffer.getMemoryRequirements();
+  vk::MemoryAllocateInfo memoryAllocateInfoStaging{
+    .allocationSize = memRequirementsStaging.size,
+    .memoryTypeIndex =
+      findMemoryType(memRequirementsStaging.memoryTypeBits, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent)};
+  vk::raii::DeviceMemory stagingBufferMemory(mDevice, memoryAllocateInfoStaging);
+
+  stagingBuffer.bindMemory(stagingBufferMemory, 0);
+  void* dataStaging = stagingBufferMemory.mapMemory(0, stagingInfo.size);
+  memcpy(dataStaging, vertices.data(), stagingInfo.size);
+  stagingBufferMemory.unmapMemory();
+
+  vk::BufferCreateInfo bufferInfo{.size = bufferSize,
+                                  .usage = vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst,
+                                  .sharingMode = vk::SharingMode::eExclusive};
+  mVertexBuffer = vk::raii::Buffer(mDevice, bufferInfo);
+
+  vk::MemoryRequirements memRequirements = mVertexBuffer.getMemoryRequirements();
+  vk::MemoryAllocateInfo memoryAllocateInfo{
+    .allocationSize = memRequirements.size,
+    .memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal)};
+  mVertexBufferMemory = vk::raii::DeviceMemory(mDevice, memoryAllocateInfo);
+
+  mVertexBuffer.bindMemory(*mVertexBufferMemory, 0);
+
+  copyBuffer(stagingBuffer, mVertexBuffer, stagingInfo.size);
+}
+
 void Renderer::createCommandBuffers() {
   mCommandBuffers.clear();
 
@@ -532,6 +590,7 @@ void Renderer::recordCommandBuffer(uint32_t imageIdx) {
     0, vk::Viewport{0.0f, 0.0f, static_cast<float>(mSwapChainDetails.extent.width), static_cast<float>(mSwapChainDetails.extent.height), 0.0f, 1.0f});
   mCommandBuffers[mFrameIdx].setScissor(0, vk::Rect2D(vk::Offset2D(0, 0), mSwapChainDetails.extent));
 
+  mCommandBuffers[mFrameIdx].bindVertexBuffers(0, *mVertexBuffer, {0});
   mCommandBuffers[mFrameIdx].draw(3, 1, 0, 0);
 
   mCommandBuffers[mFrameIdx].endRendering();
@@ -578,6 +637,40 @@ void Renderer::recreateSwapChain() {
 
   createSwapChain();
   createImageViews();
+}
+
+uint32_t Renderer::findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties) {
+  auto memProperties = mPhysicalDevice.getMemoryProperties();
+
+  for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++)
+    if ((typeFilter & (1 << i)) && (memProperties.memoryTypes[i].propertyFlags & properties) == properties) return i;
+
+  MAPLE_FATAL("Failed to find suitable memory type");
+}
+
+void Renderer::createBuffer(vk::DeviceSize size,
+                            vk::BufferUsageFlags usage,
+                            vk::MemoryPropertyFlags properties,
+                            vk::raii::Buffer& buffer,
+                            vk::raii::DeviceMemory& bufferMemory) {
+  vk::BufferCreateInfo bufferInfo{.size = size, .usage = usage, .sharingMode = vk::SharingMode::eExclusive};
+  buffer = vk::raii::Buffer(mDevice, bufferInfo);
+  vk::MemoryRequirements memRequirements = buffer.getMemoryRequirements();
+  vk::MemoryAllocateInfo allocInfo{.allocationSize = memRequirements.size,
+                                   .memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, properties)};
+  bufferMemory = vk::raii::DeviceMemory(mDevice, allocInfo);
+  buffer.bindMemory(*bufferMemory, 0);
+}
+
+void Renderer::copyBuffer(vk::raii::Buffer& srcBuffer, vk::raii::Buffer& dstBuffer, vk::DeviceSize size) {
+  vk::CommandBufferAllocateInfo allocInfo{.commandPool = mCommandPool, .level = vk::CommandBufferLevel::ePrimary, .commandBufferCount = 1};
+  vk::raii::CommandBuffer commandCopyBuffer = std::move(mDevice.allocateCommandBuffers(allocInfo).front());
+  commandCopyBuffer.begin({.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+  vk::BufferCopy copyRegion{.srcOffset = 0, .dstOffset = 0, .size = size};
+  commandCopyBuffer.copyBuffer(*srcBuffer, *dstBuffer, copyRegion);
+  commandCopyBuffer.end();
+  mGraphicsQueue.submit(vk::SubmitInfo{.commandBufferCount = 1, .pCommandBuffers = &*commandCopyBuffer}, nullptr);
+  mGraphicsQueue.waitIdle();
 }
 
 }  // namespace maple
