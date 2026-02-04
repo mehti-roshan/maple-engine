@@ -10,6 +10,8 @@
 #include <map>
 #include <ranges>
 #include <vector>
+#include <vulkan/vulkan_raii.hpp>
+#include <vulkan/vulkan_structs.hpp>
 #define GLM_FORCE_RADIANS
 #include <glm/ext/matrix_clip_space.hpp>
 #include <glm/ext/matrix_transform.hpp>
@@ -80,12 +82,13 @@ bool isPhysicalDeviceSuitable(vk::raii::PhysicalDevice device, vk::SurfaceKHR su
                                           vk::PhysicalDeviceVulkan11Features,
                                           vk::PhysicalDeviceVulkan13Features,
                                           vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>();
+  auto features = featureChain.get<vk::PhysicalDeviceFeatures2>();
   auto vk11Features = featureChain.get<vk::PhysicalDeviceVulkan11Features>();
   auto vk13Features = featureChain.get<vk::PhysicalDeviceVulkan13Features>();
   auto extDynStateFeatures = featureChain.get<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>();
 
-  if (!vk11Features.shaderDrawParameters || !vk13Features.dynamicRendering || !vk13Features.synchronization2 ||
-      !extDynStateFeatures.extendedDynamicState)
+  if (!features.features.samplerAnisotropy || !vk11Features.shaderDrawParameters || !vk13Features.dynamicRendering ||
+      !vk13Features.synchronization2 || !extDynStateFeatures.extendedDynamicState)
     return false;
 
   auto extensions = device.enumerateDeviceExtensionProperties();
@@ -180,19 +183,23 @@ void transition_image_layout(vk::Image image,
 struct Vertex {
   glm::vec2 pos;
   glm::vec3 color;
+  glm::vec2 texCoord;
 
   static vk::VertexInputBindingDescription getBindingDescription() { return {0, sizeof(Vertex), vk::VertexInputRate::eVertex}; }
-  static std::array<vk::VertexInputAttributeDescription, 2> getAttributeDescriptions() {
-    return {vk::VertexInputAttributeDescription(0, 0, vk::Format::eR32G32Sfloat, offsetof(Vertex, pos)),
-            vk::VertexInputAttributeDescription(1, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, color))};
+  static std::array<vk::VertexInputAttributeDescription, 3> getAttributeDescriptions() {
+    return {
+      vk::VertexInputAttributeDescription(0, 0, vk::Format::eR32G32Sfloat, offsetof(Vertex, pos)),
+      vk::VertexInputAttributeDescription(1, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, color)),
+      vk::VertexInputAttributeDescription(2, 0, vk::Format::eR32G32Sfloat, offsetof(Vertex, texCoord))
+    };
   }
 };
 
 const std::vector<Vertex> vertices = {
-  {{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},
-  {{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}},
-  {{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}},
-  {{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}},
+  {{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
+  {{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
+  {{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
+  {{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}},
 };
 
 const std::vector<uint16_t> indices = {0, 1, 2, 2, 3, 0};
@@ -217,6 +224,8 @@ void Renderer::Init(const std::vector<const char*>& glfwExtensions, SurfaceCreat
   createGraphicsPipeline();
   createCommandPool();
   createTextureImage();
+  createTextureImageView();
+  createTextureSampler();
   createVertexBuffer();
   createIndexBuffer();
   createUniformBuffers();
@@ -367,7 +376,7 @@ void Renderer::createLogicalDevice() {
                      vk::PhysicalDeviceVulkan13Features,
                      vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>
     featureChain = {
-      {},                                                    // vk::PhysicalDeviceFeatures2 (empty for now)
+      {.features = {.samplerAnisotropy = true}},             // vk::PhysicalDeviceFeatures2
       {.shaderDrawParameters = true},                        // Enable shader draw parameters from Vulkan 1.1
       {.synchronization2 = true, .dynamicRendering = true},  // Enable dynamic rendering from Vulkan 1.3
       {.extendedDynamicState = true}                         // Enable extended dynamic state from the extension
@@ -448,15 +457,29 @@ void Renderer::createImageViews() {
     .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1},
   };
 
-  for (const auto& image : mSwapChainImages) {
+  for (auto& image : mSwapChainImages) {
     imageViewCreateInfo.image = image;
-    mSwapChainImageViews.emplace_back(mDevice.createImageView(imageViewCreateInfo));
+    mSwapChainImageViews.emplace_back(mDevice, imageViewCreateInfo);
   }
 }
 
 void Renderer::createDescriptorSetLayout() {
-  vk::DescriptorSetLayoutBinding uboLayoutBinding(0, vk::DescriptorType::eUniformBuffer, 1, vk::ShaderStageFlagBits::eVertex, nullptr);
-  vk::DescriptorSetLayoutCreateInfo layoutInfo{.bindingCount = 1, .pBindings = &uboLayoutBinding};
+  std::array bindings = {
+    vk::DescriptorSetLayoutBinding{
+      .binding = 0,
+      .descriptorType = vk::DescriptorType::eUniformBuffer,
+      .descriptorCount = 1,
+      .stageFlags = vk::ShaderStageFlagBits::eVertex,
+    },
+    vk::DescriptorSetLayoutBinding{
+      .binding = 1,
+      .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+      .descriptorCount = 1,
+      .stageFlags = vk::ShaderStageFlagBits::eFragment,
+    },
+  };
+
+  vk::DescriptorSetLayoutCreateInfo layoutInfo{.bindingCount = bindings.size(), .pBindings = bindings.data()};
   mDescriptorSetLayout = vk::raii::DescriptorSetLayout(mDevice, layoutInfo);
 }
 
@@ -584,6 +607,32 @@ void Renderer::createTextureImage() {
   transitionImageLayout(mTextureImage, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal);
 }
 
+void Renderer::createTextureImageView() { mTextureImageView = createImageView(mTextureImage, vk::Format::eR8G8B8A8Srgb); }
+
+void Renderer::createTextureSampler() {
+  vk::PhysicalDeviceProperties properties = mPhysicalDevice.getProperties();
+
+  vk::SamplerCreateInfo samplerInfo{
+    .magFilter = vk::Filter::eLinear,
+    .minFilter = vk::Filter::eLinear,
+    .mipmapMode = vk::SamplerMipmapMode::eLinear,
+    .addressModeU = vk::SamplerAddressMode::eRepeat,
+    .addressModeV = vk::SamplerAddressMode::eRepeat,
+    .addressModeW = vk::SamplerAddressMode::eRepeat,
+    .mipLodBias = 0.0f,
+    .anisotropyEnable = vk::True,
+    .maxAnisotropy = properties.limits.maxSamplerAnisotropy,
+    .compareEnable = vk::False,
+    .compareOp = vk::CompareOp::eAlways,
+    .minLod = 0.0f,
+    .maxLod = 1.0f,
+    .borderColor = vk::BorderColor::eIntOpaqueBlack,
+    .unnormalizedCoordinates = vk::False,
+  };
+
+  mTextureSampler = vk::raii::Sampler(mDevice, samplerInfo);
+}
+
 void Renderer::createVertexBuffer() {
   vk::DeviceSize bufferSize = sizeof(vertices[0]) * vertices.size();
 
@@ -662,9 +711,14 @@ void Renderer::createUniformBuffers() {
 }
 
 void Renderer::createDescriptorPool() {
-  vk::DescriptorPoolSize poolSize(vk::DescriptorType::eUniformBuffer, MAX_FRAMES_IN_FLIGHT);
-  vk::DescriptorPoolCreateInfo poolInfo{
-    .flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet, .maxSets = MAX_FRAMES_IN_FLIGHT, .poolSizeCount = 1, .pPoolSizes = &poolSize};
+  std::array poolSize = {
+    vk::DescriptorPoolSize(vk::DescriptorType::eUniformBuffer, MAX_FRAMES_IN_FLIGHT),
+    vk::DescriptorPoolSize(vk::DescriptorType::eCombinedImageSampler, MAX_FRAMES_IN_FLIGHT),
+  };
+  vk::DescriptorPoolCreateInfo poolInfo{.flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
+                                        .maxSets = MAX_FRAMES_IN_FLIGHT,
+                                        .poolSizeCount = poolSize.size(),
+                                        .pPoolSizes = poolSize.data()};
   mDescriptorPool = vk::raii::DescriptorPool(mDevice, poolInfo);
 }
 
@@ -686,22 +740,33 @@ void Renderer::createDescriptorSets() {
     .descriptorPool = mDescriptorPool, .descriptorSetCount = static_cast<uint32_t>(layouts.size()), .pSetLayouts = layouts.data()};
   mDescriptorSets = vk::raii::DescriptorSets(mDevice, allocInfo);
   for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-    vk::DescriptorBufferInfo bufferInfo{
-      .buffer = mUniformBuffers[i],
-      .offset = 0,
-      .range = sizeof(UniformBufferObject),
+    vk::DescriptorBufferInfo bufferInfo{.buffer = mUniformBuffers[i], .offset = 0, .range = sizeof(UniformBufferObject)};
+    vk::DescriptorImageInfo imageInfo{
+      .sampler = mTextureSampler,
+      .imageView = mTextureImageView,
+      .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
     };
 
-    vk::WriteDescriptorSet descriptorWrite{
-      .dstSet = mDescriptorSets[i],
-      .dstBinding = 0,
-      .dstArrayElement = 0,
-      .descriptorCount = 1,
-      .descriptorType = vk::DescriptorType::eUniformBuffer,
-      .pBufferInfo = &bufferInfo,
+    std::array descriptorWrites = {
+      vk::WriteDescriptorSet{
+        .dstSet = mDescriptorSets[i],
+        .dstBinding = 0,
+        .dstArrayElement = 0,
+        .descriptorCount = 1,
+        .descriptorType = vk::DescriptorType::eUniformBuffer,
+        .pBufferInfo = &bufferInfo,
+      },
+      vk::WriteDescriptorSet{
+        .dstSet = mDescriptorSets[i],
+        .dstBinding = 1,
+        .dstArrayElement = 0,
+        .descriptorCount = 1,
+        .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+        .pImageInfo = &imageInfo,
+      },
     };
 
-    mDevice.updateDescriptorSets(descriptorWrite, nullptr);
+    mDevice.updateDescriptorSets(descriptorWrites, {});
   }
 }
 

@@ -81,6 +81,8 @@ class Renderer {
 
   vk::raii::Image mTextureImage = nullptr;
   vk::raii::DeviceMemory mTextureImageMemory = nullptr;
+  vk::raii::ImageView mTextureImageView = nullptr;
+  vk::raii::Sampler mTextureSampler = nullptr;
 
   void createInstance(const std::vector<const char*>& glfwExtensions);
   void setupDebugMessenger();
@@ -92,6 +94,8 @@ class Renderer {
   void createDescriptorSetLayout();
   void createCommandPool();
   void createTextureImage();
+  void createTextureImageView();
+  void createTextureSampler();
   void createVertexBuffer();
   void createIndexBuffer();
   void createUniformBuffers();
@@ -171,6 +175,19 @@ class Renderer {
                                .imageExtent = {width, height, 1}};
     commandBuffer.copyBufferToImage(*buffer, *image, vk::ImageLayout::eTransferDstOptimal, region);
     endSingleTimeCommands(commandBuffer);
+  }
+
+  vk::raii::ImageView createImageView(const vk::raii::Image& image, vk::Format format) {
+    vk::ImageViewCreateInfo viewInfo{
+      .image = image,
+      .viewType = vk::ImageViewType::e2D,
+      .format = format,
+      .components = {.r = vk::ComponentSwizzle::eIdentity,
+                     .g = vk::ComponentSwizzle::eIdentity,
+                     .b = vk::ComponentSwizzle::eIdentity,
+                     .a = vk::ComponentSwizzle::eIdentity},
+      .subresourceRange = {.aspectMask = vk::ImageAspectFlagBits::eColor, .baseMipLevel = 0, .levelCount = 1, .baseArrayLayer = 0, .layerCount = 1}};
+    return vk::raii::ImageView(mDevice, viewInfo);
   }
 };
 }  // namespace maple
