@@ -7,19 +7,17 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <map>
+#include <ranges>
+#include <vector>
+#define GLM_FORCE_RADIANS
 #include <glm/ext/matrix_clip_space.hpp>
 #include <glm/ext/matrix_transform.hpp>
-#include <map>
-#include <utility>
-#include <vector>
-#include <vulkan/vulkan_enums.hpp>
-#include <vulkan/vulkan_handles.hpp>
-#include <vulkan/vulkan_raii.hpp>
-#include <vulkan/vulkan_structs.hpp>
-#define GLM_FORCE_RADIANS
+#include <glm/fwd.hpp>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
-#include <ranges>
+#define STB_IMAGE_IMPLEMENTATION
+#include <engine/stb/stb_image.h>
 
 const std::vector<char const*> validationLayers = {"VK_LAYER_KHRONOS_validation"};
 
@@ -218,6 +216,7 @@ void Renderer::Init(const std::vector<const char*>& glfwExtensions, SurfaceCreat
   createDescriptorSetLayout();
   createGraphicsPipeline();
   createCommandPool();
+  createTextureImage();
   createVertexBuffer();
   createIndexBuffer();
   createUniformBuffers();
@@ -551,6 +550,40 @@ void Renderer::createCommandPool() {
   mCommandPool = vk::raii::CommandPool(mDevice, poolInfo);
 }
 
+void Renderer::createTextureImage() {
+  int32_t texWidth, texHeight, texChannels;
+  stbi_uc* pixels = stbi_load("assets/textures/texture.jpg", &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
+  vk::DeviceSize imageSize = texWidth * texHeight * 4;
+
+  if (!pixels) MAPLE_FATAL("failed to load texture image");
+
+  vk::raii::Buffer stagingBuffer({});
+  vk::raii::DeviceMemory stagingBufferMemory({});
+  createBuffer(imageSize,
+               vk::BufferUsageFlagBits::eTransferSrc,
+               vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
+               stagingBuffer,
+               stagingBufferMemory);
+
+  void* data = stagingBufferMemory.mapMemory(0, imageSize);
+  memcpy(data, pixels, imageSize);
+  stagingBufferMemory.unmapMemory();
+
+  stbi_image_free(pixels);
+
+  createImage(glm::u32vec2(texWidth, texHeight),
+              vk::Format::eR8G8B8A8Srgb,
+              vk::ImageTiling::eOptimal,
+              vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
+              vk::MemoryPropertyFlagBits::eDeviceLocal,
+              mTextureImage,
+              mTextureImageMemory);
+
+  transitionImageLayout(mTextureImage, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);
+  copyBufferToImage(stagingBuffer, mTextureImage, texWidth, texHeight);
+  transitionImageLayout(mTextureImage, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal);
+}
+
 void Renderer::createVertexBuffer() {
   vk::DeviceSize bufferSize = sizeof(vertices[0]) * vertices.size();
 
@@ -782,14 +815,36 @@ void Renderer::createBuffer(vk::DeviceSize size,
 }
 
 void Renderer::copyBuffer(vk::raii::Buffer& srcBuffer, vk::raii::Buffer& dstBuffer, vk::DeviceSize size) {
-  vk::CommandBufferAllocateInfo allocInfo{.commandPool = mCommandPool, .level = vk::CommandBufferLevel::ePrimary, .commandBufferCount = 1};
-  vk::raii::CommandBuffer commandCopyBuffer = std::move(mDevice.allocateCommandBuffers(allocInfo).front());
-  commandCopyBuffer.begin({.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+  auto commandCopyBuffer = beginSingleTimeCommands();
   vk::BufferCopy copyRegion{.srcOffset = 0, .dstOffset = 0, .size = size};
   commandCopyBuffer.copyBuffer(*srcBuffer, *dstBuffer, copyRegion);
-  commandCopyBuffer.end();
-  mGraphicsQueue.submit(vk::SubmitInfo{.commandBufferCount = 1, .pCommandBuffers = &*commandCopyBuffer}, nullptr);
-  mGraphicsQueue.waitIdle();
+  endSingleTimeCommands(commandCopyBuffer);
+}
+
+void Renderer::createImage(glm::u32vec2 size,
+                           vk::Format format,
+                           vk::ImageTiling tiling,
+                           vk::ImageUsageFlags usage,
+                           vk::MemoryPropertyFlags properties,
+                           vk::raii::Image& image,
+                           vk::raii::DeviceMemory& imageMemory) {
+  vk::ImageCreateInfo imageInfo{.imageType = vk::ImageType::e2D,
+                                .format = format,
+                                .extent = {size.x, size.y, 1},
+                                .mipLevels = 1,
+                                .arrayLayers = 1,
+                                .samples = vk::SampleCountFlagBits::e1,
+                                .tiling = tiling,
+                                .usage = usage,
+                                .sharingMode = vk::SharingMode::eExclusive};
+
+  image = vk::raii::Image(mDevice, imageInfo);
+
+  vk::MemoryRequirements memRequirements = image.getMemoryRequirements();
+  vk::MemoryAllocateInfo allocInfo{.allocationSize = memRequirements.size,
+                                   .memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, properties)};
+  imageMemory = vk::raii::DeviceMemory(mDevice, allocInfo);
+  image.bindMemory(imageMemory, 0);
 }
 
 }  // namespace maple
