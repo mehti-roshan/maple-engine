@@ -4,8 +4,11 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <glm/ext/matrix_clip_space.hpp>
+#include <glm/ext/matrix_transform.hpp>
 #include <map>
 #include <utility>
 #include <vector>
@@ -188,9 +191,18 @@ struct Vertex {
 };
 
 const std::vector<Vertex> vertices = {
-    {{0.0f, -0.5f}, {1.0f, 0.0f, 0.0f}},
-    {{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},
-    {{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}
+  {{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},
+  {{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}},
+  {{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}},
+  {{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}},
+};
+
+const std::vector<uint16_t> indices = {0, 1, 2, 2, 3, 0};
+
+struct UniformBufferObject {
+  glm::mat4 model;
+  glm::mat4 view;
+  glm::mat4 proj;
 };
 
 namespace maple {
@@ -203,9 +215,14 @@ void Renderer::Init(const std::vector<const char*>& glfwExtensions, SurfaceCreat
   createLogicalDevice();
   createSwapChain();
   createImageViews();
+  createDescriptorSetLayout();
   createGraphicsPipeline();
   createCommandPool();
   createVertexBuffer();
+  createIndexBuffer();
+  createUniformBuffers();
+  createDescriptorPool();
+  createDescriptorSets();
   createCommandBuffers();
   createSyncObjects();
 }
@@ -216,6 +233,8 @@ void Renderer::DrawFrame() {
   mDevice.resetFences(*mDrawFences[mFrameIdx]);
 
   mCommandBuffers[mFrameIdx].reset();
+
+  updateUniformBuffer(mFrameIdx);
   recordCommandBuffer(imageIdx);
 
   vk::PipelineStageFlags waitDestinationStageMask(vk::PipelineStageFlagBits::eColorAttachmentOutput);
@@ -249,6 +268,22 @@ void Renderer::DrawFrame() {
   }
 
   mFrameIdx = (mFrameIdx + 1) % MAX_FRAMES_IN_FLIGHT;
+}
+
+void Renderer::updateUniformBuffer(uint32_t currentImage) {
+  static auto startTime = std::chrono::high_resolution_clock::now();
+
+  auto currentTime = std::chrono::high_resolution_clock::now();
+  float time = std::chrono::duration<float, std::chrono::seconds::period>(currentTime - startTime).count();
+
+  UniformBufferObject ubo{
+    .model = glm::rotate(glm::mat4(1.0f), time * glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f)),
+    .view = glm::lookAt(glm::vec3(2.0f), glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f)),
+    .proj = glm::perspective(
+      glm::radians(45.0f), static_cast<float>(mSwapChainDetails.extent.width) / static_cast<float>(mSwapChainDetails.extent.height), 0.1f, 2000.0f)};
+  ubo.proj[1][1] *= -1;  // Invert Y for Vulkan
+
+  memcpy(mUniformBuffersMapped[currentImage], &ubo, sizeof(ubo));
 }
 
 void Renderer::createInstance(const std::vector<const char*>& glfwExtensions) {
@@ -420,6 +455,12 @@ void Renderer::createImageViews() {
   }
 }
 
+void Renderer::createDescriptorSetLayout() {
+  vk::DescriptorSetLayoutBinding uboLayoutBinding(0, vk::DescriptorType::eUniformBuffer, 1, vk::ShaderStageFlagBits::eVertex, nullptr);
+  vk::DescriptorSetLayoutCreateInfo layoutInfo{.bindingCount = 1, .pBindings = &uboLayoutBinding};
+  mDescriptorSetLayout = vk::raii::DescriptorSetLayout(mDevice, layoutInfo);
+}
+
 void Renderer::createGraphicsPipeline() {
   auto shaderModule = createShaderModule(mDevice, file::ReadFile("assets/shaders/slang.spv"));
 
@@ -460,7 +501,7 @@ void Renderer::createGraphicsPipeline() {
     .rasterizerDiscardEnable = vk::False,
     .polygonMode = vk::PolygonMode::eFill,
     .cullMode = vk::CullModeFlagBits::eBack,
-    .frontFace = vk::FrontFace::eClockwise,
+    .frontFace = vk::FrontFace::eCounterClockwise,
     .depthBiasEnable = vk::False,
     .depthBiasSlopeFactor = 1.0f,
     .lineWidth = 1.0f,
@@ -477,7 +518,7 @@ void Renderer::createGraphicsPipeline() {
   vk::PipelineColorBlendStateCreateInfo colorBlending{
     .logicOpEnable = vk::False, .logicOp = vk::LogicOp::eCopy, .attachmentCount = 1, .pAttachments = &colorBlendAttachment};
 
-  vk::PipelineLayoutCreateInfo pipelineLayoutInfo{.setLayoutCount = 0, .pushConstantRangeCount = 0};
+  vk::PipelineLayoutCreateInfo pipelineLayoutInfo{.setLayoutCount = 1, .pSetLayouts = &*mDescriptorSetLayout, .pushConstantRangeCount = 0};
   mPipelineLayout = vk::raii::PipelineLayout(mDevice, pipelineLayoutInfo);
 
   vk::PipelineRenderingCreateInfo pipelineRenderingCreateInfo{.colorAttachmentCount = 1, .pColorAttachmentFormats = &mSwapChainDetails.format.format};
@@ -543,6 +584,57 @@ void Renderer::createVertexBuffer() {
   copyBuffer(stagingBuffer, mVertexBuffer, stagingInfo.size);
 }
 
+void Renderer::createIndexBuffer() {
+  vk::DeviceSize bufferSize = sizeof(indices[0]) * indices.size();
+
+  vk::raii::Buffer stagingBuffer({});
+  vk::raii::DeviceMemory stagingBufferMemory({});
+  createBuffer(bufferSize,
+               vk::BufferUsageFlagBits::eTransferSrc,
+               vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
+               stagingBuffer,
+               stagingBufferMemory);
+
+  void* data = stagingBufferMemory.mapMemory(0, bufferSize);
+  memcpy(data, indices.data(), (size_t)bufferSize);
+  stagingBufferMemory.unmapMemory();
+
+  createBuffer(bufferSize,
+               vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eIndexBuffer,
+               vk::MemoryPropertyFlagBits::eDeviceLocal,
+               mIndexBuffer,
+               mIndexBufferMemory);
+
+  copyBuffer(stagingBuffer, mIndexBuffer, bufferSize);
+}
+
+void Renderer::createUniformBuffers() {
+  mUniformBuffers.clear();
+  mUniformBuffersMemory.clear();
+  mUniformBuffersMapped.clear();
+
+  for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+    vk::DeviceSize bufferSize = sizeof(UniformBufferObject);
+    vk::raii::Buffer buffer({});
+    vk::raii::DeviceMemory bufferMem({});
+    createBuffer(bufferSize,
+                 vk::BufferUsageFlagBits::eUniformBuffer,
+                 vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
+                 buffer,
+                 bufferMem);
+    mUniformBuffers.emplace_back(std::move(buffer));
+    mUniformBuffersMemory.emplace_back(std::move(bufferMem));
+    mUniformBuffersMapped.emplace_back(mUniformBuffersMemory[i].mapMemory(0, bufferSize));
+  }
+}
+
+void Renderer::createDescriptorPool() {
+  vk::DescriptorPoolSize poolSize(vk::DescriptorType::eUniformBuffer, MAX_FRAMES_IN_FLIGHT);
+  vk::DescriptorPoolCreateInfo poolInfo{
+    .flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet, .maxSets = MAX_FRAMES_IN_FLIGHT, .poolSizeCount = 1, .pPoolSizes = &poolSize};
+  mDescriptorPool = vk::raii::DescriptorPool(mDevice, poolInfo);
+}
+
 void Renderer::createCommandBuffers() {
   mCommandBuffers.clear();
 
@@ -553,6 +645,31 @@ void Renderer::createCommandBuffers() {
   };
 
   mCommandBuffers = vk::raii::CommandBuffers(mDevice, allocInfo);
+}
+
+void Renderer::createDescriptorSets() {
+  std::vector<vk::DescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, *mDescriptorSetLayout);
+  vk::DescriptorSetAllocateInfo allocInfo{
+    .descriptorPool = mDescriptorPool, .descriptorSetCount = static_cast<uint32_t>(layouts.size()), .pSetLayouts = layouts.data()};
+  mDescriptorSets = vk::raii::DescriptorSets(mDevice, allocInfo);
+  for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+    vk::DescriptorBufferInfo bufferInfo{
+      .buffer = mUniformBuffers[i],
+      .offset = 0,
+      .range = sizeof(UniformBufferObject),
+    };
+
+    vk::WriteDescriptorSet descriptorWrite{
+      .dstSet = mDescriptorSets[i],
+      .dstBinding = 0,
+      .dstArrayElement = 0,
+      .descriptorCount = 1,
+      .descriptorType = vk::DescriptorType::eUniformBuffer,
+      .pBufferInfo = &bufferInfo,
+    };
+
+    mDevice.updateDescriptorSets(descriptorWrite, nullptr);
+  }
 }
 
 void Renderer::recordCommandBuffer(uint32_t imageIdx) {
@@ -591,7 +708,9 @@ void Renderer::recordCommandBuffer(uint32_t imageIdx) {
   mCommandBuffers[mFrameIdx].setScissor(0, vk::Rect2D(vk::Offset2D(0, 0), mSwapChainDetails.extent));
 
   mCommandBuffers[mFrameIdx].bindVertexBuffers(0, *mVertexBuffer, {0});
-  mCommandBuffers[mFrameIdx].draw(3, 1, 0, 0);
+  mCommandBuffers[mFrameIdx].bindIndexBuffer(mIndexBuffer, 0, vk::IndexType::eUint16);
+  mCommandBuffers[mFrameIdx].bindDescriptorSets(vk::PipelineBindPoint::eGraphics, mPipelineLayout, 0, *mDescriptorSets[mFrameIdx], nullptr);
+  mCommandBuffers[mFrameIdx].drawIndexed(indices.size(), 1, 0, 0, 0);
 
   mCommandBuffers[mFrameIdx].endRendering();
 

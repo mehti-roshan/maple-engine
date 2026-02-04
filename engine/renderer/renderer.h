@@ -53,6 +53,9 @@ class Renderer {
   std::vector<vk::Image> mSwapChainImages;
   std::vector<vk::raii::ImageView> mSwapChainImageViews;
 
+  vk::raii::DescriptorSetLayout mDescriptorSetLayout = nullptr;
+  vk::raii::DescriptorPool mDescriptorPool = nullptr;
+  std::vector<vk::raii::DescriptorSet> mDescriptorSets;
   vk::raii::PipelineLayout mPipelineLayout = nullptr;
   vk::raii::Pipeline mGraphicsPipeline = nullptr;
 
@@ -65,6 +68,15 @@ class Renderer {
 
   vk::raii::Buffer mVertexBuffer = nullptr;
   vk::raii::DeviceMemory mVertexBufferMemory = nullptr;
+  vk::raii::Buffer mIndexBuffer = nullptr;
+  vk::raii::DeviceMemory mIndexBufferMemory = nullptr;
+
+  vk::raii::Buffer IndexBuffer = nullptr;
+  vk::raii::DeviceMemory IndexBufferMemory = nullptr;
+
+  std::vector<vk::raii::Buffer> mUniformBuffers;
+  std::vector<vk::raii::DeviceMemory> mUniformBuffersMemory;
+  std::vector<void*> mUniformBuffersMapped;
 
   void createInstance(const std::vector<const char*>& glfwExtensions);
   void setupDebugMessenger();
@@ -73,8 +85,14 @@ class Renderer {
   void createSwapChain();
   void createImageViews();
   void createGraphicsPipeline();
+  void createDescriptorSetLayout();
   void createCommandPool();
   void createVertexBuffer();
+  void createIndexBuffer();
+  void createUniformBuffers();
+  void createDescriptorPool();
+  void createDescriptorSets();
+  void updateUniformBuffer(uint32_t currentImage);
   void createCommandBuffers();
   void recordCommandBuffer(uint32_t imageIdx);
   void createSyncObjects();
