@@ -1,5 +1,5 @@
 struct VSInput {
-  float2 inPosition;
+  float3 inPosition;
   float3 inColor;
   float2 inTexCoord;
 };
@@ -20,7 +20,7 @@ struct VSOutput {
 [shader("vertex")]
 VSOutput vertMain(VSInput input) {
   VSOutput output;
-  output.pos = mul(ubo.proj, mul(ubo.view, mul(ubo.model, float4(input.inPosition, 0.0, 1.0))));
+  output.pos = mul(ubo.proj, mul(ubo.view, mul(ubo.model, float4(input.inPosition, 1.0))));
   output.color = input.inColor;
   output.texCoord = input.inTexCoord;
   return output;
@@ -30,5 +30,5 @@ Sampler2D texture;
 
 [shader("fragment")]
 float4 fragMain(VSOutput vertIn) : SV_TARGET {
-  return float4(vertIn.color * texture.Sample(vertIn.texCoord * 2).rgb, 1.0);
+  return texture.Sample(vertIn.texCoord);
 }

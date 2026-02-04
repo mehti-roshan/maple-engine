@@ -79,6 +79,10 @@ class Renderer {
   std::vector<vk::raii::DeviceMemory> mUniformBuffersMemory;
   std::vector<void*> mUniformBuffersMapped;
 
+  vk::raii::Image mDepthImage = nullptr;
+  vk::raii::DeviceMemory mDepthImageMemory = nullptr;
+  vk::raii::ImageView mDepthImageView = nullptr;
+
   vk::raii::Image mTextureImage = nullptr;
   vk::raii::DeviceMemory mTextureImageMemory = nullptr;
   vk::raii::ImageView mTextureImageView = nullptr;
@@ -93,6 +97,7 @@ class Renderer {
   void createGraphicsPipeline();
   void createDescriptorSetLayout();
   void createCommandPool();
+  void createDepthResources();
   void createTextureImage();
   void createTextureImageView();
   void createTextureSampler();
@@ -177,7 +182,7 @@ class Renderer {
     endSingleTimeCommands(commandBuffer);
   }
 
-  vk::raii::ImageView createImageView(const vk::raii::Image& image, vk::Format format) {
+  vk::raii::ImageView createImageView(const vk::raii::Image& image, vk::Format format, vk::ImageAspectFlagBits aspectFlags) {
     vk::ImageViewCreateInfo viewInfo{
       .image = image,
       .viewType = vk::ImageViewType::e2D,
@@ -186,8 +191,30 @@ class Renderer {
                      .g = vk::ComponentSwizzle::eIdentity,
                      .b = vk::ComponentSwizzle::eIdentity,
                      .a = vk::ComponentSwizzle::eIdentity},
-      .subresourceRange = {.aspectMask = vk::ImageAspectFlagBits::eColor, .baseMipLevel = 0, .levelCount = 1, .baseArrayLayer = 0, .layerCount = 1}};
+      .subresourceRange = {.aspectMask = aspectFlags, .baseMipLevel = 0, .levelCount = 1, .baseArrayLayer = 0, .layerCount = 1}};
     return vk::raii::ImageView(mDevice, viewInfo);
   }
+
+  vk::Format findSupportedFormat(const std::vector<vk::Format>& candidates, vk::ImageTiling tiling, vk::FormatFeatureFlags features) {
+    for (vk::Format format : candidates) {
+      vk::FormatProperties props = mPhysicalDevice.getFormatProperties(format);
+
+      if (tiling == vk::ImageTiling::eLinear && (props.linearTilingFeatures & features) == features) {
+        return format;
+      } else if (tiling == vk::ImageTiling::eOptimal && (props.optimalTilingFeatures & features) == features) {
+        return format;
+      }
+    }
+
+    MAPLE_FATAL("Failed to find supported format");
+  }
+
+  vk::Format findDepthFormat() {
+    return findSupportedFormat({vk::Format::eD32Sfloat, vk::Format::eD32SfloatS8Uint, vk::Format::eD24UnormS8Uint},
+                               vk::ImageTiling::eOptimal,
+                               vk::FormatFeatureFlagBits::eDepthStencilAttachment);
+  }
+
+  bool hasStencilComponent(vk::Format format) { return format == vk::Format::eD32SfloatS8Uint || format == vk::Format::eD24UnormS8Uint; }
 };
 }  // namespace maple
