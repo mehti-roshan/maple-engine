@@ -7,7 +7,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <glm/geometric.hpp>
 #include <map>
 #include <ranges>
 #include <vector>
@@ -23,6 +22,8 @@
 #include <glm/gtc/matrix_transform.hpp>
 #define STB_IMAGE_IMPLEMENTATION
 #include <engine/stb/stb_image.h>
+
+#include "mesh.h"
 
 const std::vector<char const*> validationLayers = {"VK_LAYER_KHRONOS_validation"};
 
@@ -77,6 +78,32 @@ QueueFamilyIndices getDeviceQueueFamilyIndices(vk::raii::PhysicalDevice device, 
 
   return indices;
 }
+
+struct Vertex {
+  glm::vec3 pos;
+  glm::vec3 color;
+  glm::vec2 texCoord;
+
+  static vk::VertexInputBindingDescription getBindingDescription() { return {0, sizeof(Vertex), vk::VertexInputRate::eVertex}; }
+  static std::vector<vk::VertexInputAttributeDescription> getAttributeDescriptions() {
+    return {vk::VertexInputAttributeDescription(0, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, pos)),
+            vk::VertexInputAttributeDescription(1, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, color)),
+            vk::VertexInputAttributeDescription(2, 0, vk::Format::eR32G32Sfloat, offsetof(Vertex, texCoord))};
+  }
+};
+
+Mesh<Vertex, uint16_t> mesh = {
+  .vertices = {{{-0.5f, -0.5f, 0.0f}, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f}},
+               {{0.5f, -0.5f, 0.0f}, {0.0f, 1.0f, 0.0f}, {1.0f, 0.0f}},
+               {{0.5f, 0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {1.0f, 1.0f}},
+               {{-0.5f, 0.5f, 0.0f}, {1.0f, 1.0f, 1.0f}, {0.0f, 1.0f}},
+
+               {{-0.5f, -0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f}},
+               {{0.5f, -0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}, {1.0f, 0.0f}},
+               {{0.5f, 0.5f, -0.5f}, {0.0f, 0.0f, 1.0f}, {1.0f, 1.0f}},
+               {{-0.5f, 0.5f, -0.5f}, {1.0f, 1.0f, 1.0f}, {0.0f, 1.0f}}},
+  .indices = {0, 1, 2, 2, 3, 0, 4, 5, 6, 6, 7, 4},
+};
 
 bool isPhysicalDeviceSuitable(vk::raii::PhysicalDevice device, vk::SurfaceKHR surface) {
   if (device.getProperties().apiVersion < VK_API_VERSION_1_3) return false;
@@ -183,47 +210,6 @@ void transition_image_layout(vk::Image image,
   vk::DependencyInfo dependencyInfo = {.dependencyFlags = {}, .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &barrier};
   commandBuffer.pipelineBarrier2(dependencyInfo);
 }
-
-struct Vertex {
-  glm::vec3 pos;
-  glm::vec3 color;
-  glm::vec2 texCoord;
-
-  static vk::VertexInputBindingDescription getBindingDescription() { return {0, sizeof(Vertex), vk::VertexInputRate::eVertex}; }
-  static std::array<vk::VertexInputAttributeDescription, 3> getAttributeDescriptions() {
-    return {vk::VertexInputAttributeDescription(0, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, pos)),
-            vk::VertexInputAttributeDescription(1, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, color)),
-            vk::VertexInputAttributeDescription(2, 0, vk::Format::eR32G32Sfloat, offsetof(Vertex, texCoord))};
-  }
-};
-
-const std::vector<Vertex> vertices = {
-  {{-0.5f, -0.5f, 0.0f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
-  {{0.5f, -0.5f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
-  {{0.5f, 0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
-  {{-0.5f, 0.5f, 0.0f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}},
-
-  {{-0.5f, -0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
-  {{0.5f, -0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
-  {{0.5f, 0.5f, -0.5f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
-  {{-0.5f, 0.5f, -0.5f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}},
-};
-
-const std::vector<uint16_t> indices = {
-  0,
-  1,
-  2,
-  2,
-  3,
-  0,
-
-  4,
-  5,
-  6,
-  6,
-  7,
-  4,
-};
 
 struct UniformBufferObject {
   glm::mat4 model;
@@ -519,12 +505,12 @@ void Renderer::createGraphicsPipeline() {
     .pDynamicStates = dynamicStates.data(),
   };
 
-  auto bindingDescription = Vertex::getBindingDescription();
-  auto attributeDescriptions = Vertex::getAttributeDescriptions();
+  auto bindingDescription = mesh.getBindingDescription();
+  auto attributeDescriptions = mesh.getAttributeDescriptions();
   vk::PipelineVertexInputStateCreateInfo vertexInputInfo{
     .vertexBindingDescriptionCount = 1,
     .pVertexBindingDescriptions = &bindingDescription,
-    .vertexAttributeDescriptionCount = attributeDescriptions.size(),
+    .vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescriptions.size()),
     .pVertexAttributeDescriptions = attributeDescriptions.data(),
   };
 
@@ -573,7 +559,8 @@ void Renderer::createGraphicsPipeline() {
   vk::PipelineLayoutCreateInfo pipelineLayoutInfo{.setLayoutCount = 1, .pSetLayouts = &*mDescriptorSetLayout, .pushConstantRangeCount = 0};
   mPipelineLayout = vk::raii::PipelineLayout(mDevice, pipelineLayoutInfo);
 
-  vk::PipelineRenderingCreateInfo pipelineRenderingCreateInfo{.colorAttachmentCount = 1, .pColorAttachmentFormats = &mSwapChainDetails.format.format, .depthAttachmentFormat = findDepthFormat()};
+  vk::PipelineRenderingCreateInfo pipelineRenderingCreateInfo{
+    .colorAttachmentCount = 1, .pColorAttachmentFormats = &mSwapChainDetails.format.format, .depthAttachmentFormat = findDepthFormat()};
   vk::GraphicsPipelineCreateInfo pipelineInfo{
     .pNext = &pipelineRenderingCreateInfo,
     .stageCount = 2,
@@ -619,7 +606,7 @@ void Renderer::createDepthResources() {
 
 void Renderer::createTextureImage() {
   int32_t texWidth, texHeight, texChannels;
-  stbi_uc* pixels = stbi_load("assets/textures/texture.jpg", &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
+  stbi_uc* pixels = stbi_load("assets/textures/viking_room.png", &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
   vk::DeviceSize imageSize = texWidth * texHeight * 4;
 
   if (!pixels) MAPLE_FATAL("failed to load texture image");
@@ -680,7 +667,7 @@ void Renderer::createTextureSampler() {
 }
 
 void Renderer::createVertexBuffer() {
-  vk::DeviceSize bufferSize = sizeof(vertices[0]) * vertices.size();
+  vk::DeviceSize bufferSize = sizeof(mesh.vertices[0]) * mesh.vertices.size();
 
   vk::BufferCreateInfo stagingInfo{.size = bufferSize, .usage = vk::BufferUsageFlagBits::eTransferSrc, .sharingMode = vk::SharingMode::eExclusive};
   vk::raii::Buffer stagingBuffer(mDevice, stagingInfo);
@@ -693,7 +680,7 @@ void Renderer::createVertexBuffer() {
 
   stagingBuffer.bindMemory(stagingBufferMemory, 0);
   void* dataStaging = stagingBufferMemory.mapMemory(0, stagingInfo.size);
-  memcpy(dataStaging, vertices.data(), stagingInfo.size);
+  memcpy(dataStaging, mesh.vertices.data(), stagingInfo.size);
   stagingBufferMemory.unmapMemory();
 
   vk::BufferCreateInfo bufferInfo{.size = bufferSize,
@@ -713,7 +700,7 @@ void Renderer::createVertexBuffer() {
 }
 
 void Renderer::createIndexBuffer() {
-  vk::DeviceSize bufferSize = sizeof(indices[0]) * indices.size();
+  vk::DeviceSize bufferSize = sizeof(mesh.indices[0]) * mesh.indices.size();
 
   vk::raii::Buffer stagingBuffer({});
   vk::raii::DeviceMemory stagingBufferMemory({});
@@ -724,7 +711,7 @@ void Renderer::createIndexBuffer() {
                stagingBufferMemory);
 
   void* data = stagingBufferMemory.mapMemory(0, bufferSize);
-  memcpy(data, indices.data(), (size_t)bufferSize);
+  memcpy(data, mesh.indices.data(), (size_t)bufferSize);
   stagingBufferMemory.unmapMemory();
 
   createBuffer(bufferSize,
@@ -878,7 +865,7 @@ void Renderer::recordCommandBuffer(uint32_t imageIdx) {
   mCommandBuffers[mFrameIdx].bindVertexBuffers(0, *mVertexBuffer, {0});
   mCommandBuffers[mFrameIdx].bindIndexBuffer(mIndexBuffer, 0, vk::IndexType::eUint16);
   mCommandBuffers[mFrameIdx].bindDescriptorSets(vk::PipelineBindPoint::eGraphics, mPipelineLayout, 0, *mDescriptorSets[mFrameIdx], nullptr);
-  mCommandBuffers[mFrameIdx].drawIndexed(indices.size(), 1, 0, 0, 0);
+  mCommandBuffers[mFrameIdx].drawIndexed(mesh.indices.size(), 1, 0, 0, 0);
 
   mCommandBuffers[mFrameIdx].endRendering();
 
