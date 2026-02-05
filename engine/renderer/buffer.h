@@ -28,7 +28,9 @@ struct Buffer {
   }
 
   [[nodiscard]]
-  void* MapMemory(vk::DeviceSize offset, vk::DeviceSize size) { return bufferMemory.mapMemory(offset, size); }
+  void* MapMemory(vk::DeviceSize offset, vk::DeviceSize size) {
+    return bufferMemory.mapMemory(offset, size);
+  }
   void UnMapMemory() { bufferMemory.unmapMemory(); }
 
  private:
