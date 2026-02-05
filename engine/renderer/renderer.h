@@ -1,8 +1,11 @@
 #pragma once
 #include <functional>
 #include <glm/fwd.hpp>
+#include <optional>
 #include <vector>
 
+#include "buffer.h"
+#include "engine/renderer/buffer.h"
 #include "log_macros.h"
 
 #define VULKAN_HPP_NO_STRUCT_CONSTRUCTORS
@@ -67,17 +70,10 @@ class Renderer {
   std::vector<vk::raii::Semaphore> mRenderCompleteSems;
   std::vector<vk::raii::Fence> mDrawFences;
 
-  vk::raii::Buffer mVertexBuffer = nullptr;
-  vk::raii::DeviceMemory mVertexBufferMemory = nullptr;
-  vk::raii::Buffer mIndexBuffer = nullptr;
-  vk::raii::DeviceMemory mIndexBufferMemory = nullptr;
+  std::optional<Buffer> mVertexBuffer = std::nullopt;
+  std::optional<Buffer> mIndexBuffer = std::nullopt;
 
-  vk::raii::Buffer IndexBuffer = nullptr;
-  vk::raii::DeviceMemory IndexBufferMemory = nullptr;
-
-  std::vector<vk::raii::Buffer> mUniformBuffers;
-  std::vector<vk::raii::DeviceMemory> mUniformBuffersMemory;
-  std::vector<void*> mUniformBuffersMapped;
+  std::vector<std::pair<std::optional<Buffer>, void*>> mUniformBuffers;  // Buffer and mapped pointer
 
   vk::raii::Image mDepthImage = nullptr;
   vk::raii::DeviceMemory mDepthImageMemory = nullptr;
@@ -114,13 +110,13 @@ class Renderer {
   void recreateSwapChain();
   void cleanupSwapChain();
 
-  uint32_t findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties);
-  void createBuffer(vk::DeviceSize size,
-                    vk::BufferUsageFlags usage,
-                    vk::MemoryPropertyFlags properties,
-                    vk::raii::Buffer& buffer,
-                    vk::raii::DeviceMemory& bufferMemory);
-  void copyBuffer(vk::raii::Buffer& srcBuffer, vk::raii::Buffer& dstBuffer, vk::DeviceSize size);
+  void copyBuffer(vk::raii::Buffer& srcBuffer, vk::raii::Buffer& dstBuffer, vk::DeviceSize size) {
+    auto commandCopyBuffer = beginSingleTimeCommands();
+    vk::BufferCopy copyRegion{.srcOffset = 0, .dstOffset = 0, .size = size};
+    commandCopyBuffer.copyBuffer(*srcBuffer, *dstBuffer, copyRegion);
+    endSingleTimeCommands(commandCopyBuffer);
+  }
+  
   void createImage(
     glm::u32vec2 size, vk::Format, vk::ImageTiling, vk::ImageUsageFlags, vk::MemoryPropertyFlags, vk::raii::Image&, vk::raii::DeviceMemory&);
 
@@ -216,5 +212,14 @@ class Renderer {
   }
 
   bool hasStencilComponent(vk::Format format) { return format == vk::Format::eD32SfloatS8Uint || format == vk::Format::eD24UnormS8Uint; }
+
+  uint32_t findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties) {
+    auto memProperties = mPhysicalDevice.getMemoryProperties();
+
+    for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++)
+      if ((typeFilter & (1 << i)) && (memProperties.memoryTypes[i].propertyFlags & properties) == properties) return i;
+
+    MAPLE_FATAL("Failed to find suitable memory type");
+  }
 };
 }  // namespace maple

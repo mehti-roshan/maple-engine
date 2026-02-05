@@ -14,6 +14,8 @@
 #include <vulkan/vulkan_handles.hpp>
 #include <vulkan/vulkan_raii.hpp>
 #include <vulkan/vulkan_structs.hpp>
+
+#include "engine/renderer/buffer.h"
 #define GLM_FORCE_RADIANS
 #include <glm/ext/matrix_clip_space.hpp>
 #include <glm/ext/matrix_transform.hpp>
@@ -299,7 +301,7 @@ void Renderer::updateUniformBuffer(uint32_t currentImage) {
       glm::radians(45.0f), static_cast<float>(mSwapChainDetails.extent.width) / static_cast<float>(mSwapChainDetails.extent.height), 0.1f, 2000.0f)};
   ubo.proj[1][1] *= -1;  // Invert Y for Vulkan
 
-  memcpy(mUniformBuffersMapped[currentImage], &ubo, sizeof(ubo));
+  memcpy(mUniformBuffers[currentImage].second, &ubo, sizeof(ubo));
 }
 
 void Renderer::createInstance(const std::vector<const char*>& glfwExtensions) {
@@ -611,17 +613,17 @@ void Renderer::createTextureImage() {
 
   if (!pixels) MAPLE_FATAL("failed to load texture image");
 
-  vk::raii::Buffer stagingBuffer({});
-  vk::raii::DeviceMemory stagingBufferMemory({});
-  createBuffer(imageSize,
-               vk::BufferUsageFlagBits::eTransferSrc,
-               vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
-               stagingBuffer,
-               stagingBufferMemory);
+  Buffer stage({
+    .device = mDevice,
+    .physicalDevice = mPhysicalDevice,
+    .size = imageSize,
+    .usage = vk::BufferUsageFlagBits::eTransferSrc,
+    .properties = vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
+  });
 
-  void* data = stagingBufferMemory.mapMemory(0, imageSize);
+  void* data = stage.MapMemory(0, imageSize);
   memcpy(data, pixels, imageSize);
-  stagingBufferMemory.unmapMemory();
+  stage.UnMapMemory();
 
   stbi_image_free(pixels);
 
@@ -634,7 +636,7 @@ void Renderer::createTextureImage() {
               mTextureImageMemory);
 
   transitionImageLayout(mTextureImage, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);
-  copyBufferToImage(stagingBuffer, mTextureImage, texWidth, texHeight);
+  copyBufferToImage(stage.buffer, mTextureImage, texWidth, texHeight);
   transitionImageLayout(mTextureImage, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal);
 }
 
@@ -667,79 +669,68 @@ void Renderer::createTextureSampler() {
 }
 
 void Renderer::createVertexBuffer() {
-  vk::DeviceSize bufferSize = sizeof(mesh.vertices[0]) * mesh.vertices.size();
+  Buffer stage(BufferCreateInfo{
+    .device = mDevice,
+    .physicalDevice = mPhysicalDevice,
+    .size = sizeof(mesh.vertices[0]) * mesh.vertices.size(),
+    .usage = vk::BufferUsageFlagBits::eTransferSrc,
+    .properties = vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
+  });
 
-  vk::BufferCreateInfo stagingInfo{.size = bufferSize, .usage = vk::BufferUsageFlagBits::eTransferSrc, .sharingMode = vk::SharingMode::eExclusive};
-  vk::raii::Buffer stagingBuffer(mDevice, stagingInfo);
-  vk::MemoryRequirements memRequirementsStaging = stagingBuffer.getMemoryRequirements();
-  vk::MemoryAllocateInfo memoryAllocateInfoStaging{
-    .allocationSize = memRequirementsStaging.size,
-    .memoryTypeIndex =
-      findMemoryType(memRequirementsStaging.memoryTypeBits, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent)};
-  vk::raii::DeviceMemory stagingBufferMemory(mDevice, memoryAllocateInfoStaging);
+  void* data = stage.MapMemory(0, stage.size);
+  memcpy(data, mesh.vertices.data(), stage.size);
+  stage.UnMapMemory();
 
-  stagingBuffer.bindMemory(stagingBufferMemory, 0);
-  void* dataStaging = stagingBufferMemory.mapMemory(0, stagingInfo.size);
-  memcpy(dataStaging, mesh.vertices.data(), stagingInfo.size);
-  stagingBufferMemory.unmapMemory();
+  mVertexBuffer = Buffer(BufferCreateInfo{
+    .device = mDevice,
+    .physicalDevice = mPhysicalDevice,
+    .size = stage.size,
+    .usage = vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst,
+    .properties = vk::MemoryPropertyFlagBits::eDeviceLocal,
+  });
 
-  vk::BufferCreateInfo bufferInfo{.size = bufferSize,
-                                  .usage = vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst,
-                                  .sharingMode = vk::SharingMode::eExclusive};
-  mVertexBuffer = vk::raii::Buffer(mDevice, bufferInfo);
-
-  vk::MemoryRequirements memRequirements = mVertexBuffer.getMemoryRequirements();
-  vk::MemoryAllocateInfo memoryAllocateInfo{
-    .allocationSize = memRequirements.size,
-    .memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal)};
-  mVertexBufferMemory = vk::raii::DeviceMemory(mDevice, memoryAllocateInfo);
-
-  mVertexBuffer.bindMemory(*mVertexBufferMemory, 0);
-
-  copyBuffer(stagingBuffer, mVertexBuffer, stagingInfo.size);
+  copyBuffer(stage.buffer, mVertexBuffer->buffer, stage.size);
 }
 
 void Renderer::createIndexBuffer() {
-  vk::DeviceSize bufferSize = sizeof(mesh.indices[0]) * mesh.indices.size();
+  Buffer stage(BufferCreateInfo{
+    .device = mDevice,
+    .physicalDevice = mPhysicalDevice,
+    .size = sizeof(mesh.indices[0]) * mesh.indices.size(),
+    .usage = vk::BufferUsageFlagBits::eTransferSrc,
+    .properties = vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
+  });
 
-  vk::raii::Buffer stagingBuffer({});
-  vk::raii::DeviceMemory stagingBufferMemory({});
-  createBuffer(bufferSize,
-               vk::BufferUsageFlagBits::eTransferSrc,
-               vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
-               stagingBuffer,
-               stagingBufferMemory);
+  void* data = stage.MapMemory(0, stage.size);
+  memcpy(data, mesh.indices.data(), (size_t)stage.size);
+  stage.UnMapMemory();
 
-  void* data = stagingBufferMemory.mapMemory(0, bufferSize);
-  memcpy(data, mesh.indices.data(), (size_t)bufferSize);
-  stagingBufferMemory.unmapMemory();
+  mIndexBuffer = Buffer(BufferCreateInfo{.device = mDevice,
+                                         .physicalDevice = mPhysicalDevice,
+                                         .size = stage.size,
+                                         .usage = vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eIndexBuffer,
+                                         .properties = vk::MemoryPropertyFlagBits::eDeviceLocal});
 
-  createBuffer(bufferSize,
-               vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eIndexBuffer,
-               vk::MemoryPropertyFlagBits::eDeviceLocal,
-               mIndexBuffer,
-               mIndexBufferMemory);
-
-  copyBuffer(stagingBuffer, mIndexBuffer, bufferSize);
+  copyBuffer(stage.buffer, mIndexBuffer->buffer, stage.size);
 }
 
 void Renderer::createUniformBuffers() {
   mUniformBuffers.clear();
-  mUniformBuffersMemory.clear();
-  mUniformBuffersMapped.clear();
 
   for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
     vk::DeviceSize bufferSize = sizeof(UniformBufferObject);
-    vk::raii::Buffer buffer({});
-    vk::raii::DeviceMemory bufferMem({});
-    createBuffer(bufferSize,
-                 vk::BufferUsageFlagBits::eUniformBuffer,
-                 vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
-                 buffer,
-                 bufferMem);
-    mUniformBuffers.emplace_back(std::move(buffer));
-    mUniformBuffersMemory.emplace_back(std::move(bufferMem));
-    mUniformBuffersMapped.emplace_back(mUniformBuffersMemory[i].mapMemory(0, bufferSize));
+
+    mUniformBuffers.emplace_back(
+      BufferCreateInfo{
+        .device = mDevice,
+        .physicalDevice = mPhysicalDevice,
+        .size = bufferSize,
+        .usage = vk::BufferUsageFlagBits::eUniformBuffer,
+        .properties = vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
+      },
+      nullptr);
+
+    mUniformBuffers[i].second = mUniformBuffers[i].first->MapMemory(0, bufferSize);
   }
 }
 
@@ -773,7 +764,7 @@ void Renderer::createDescriptorSets() {
     .descriptorPool = mDescriptorPool, .descriptorSetCount = static_cast<uint32_t>(layouts.size()), .pSetLayouts = layouts.data()};
   mDescriptorSets = vk::raii::DescriptorSets(mDevice, allocInfo);
   for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-    vk::DescriptorBufferInfo bufferInfo{.buffer = mUniformBuffers[i], .offset = 0, .range = sizeof(UniformBufferObject)};
+    vk::DescriptorBufferInfo bufferInfo{.buffer = mUniformBuffers[i].first->buffer, .offset = 0, .range = sizeof(UniformBufferObject)};
     vk::DescriptorImageInfo imageInfo{
       .sampler = mTextureSampler,
       .imageView = mTextureImageView,
@@ -862,8 +853,8 @@ void Renderer::recordCommandBuffer(uint32_t imageIdx) {
     0, vk::Viewport{0.0f, 0.0f, static_cast<float>(mSwapChainDetails.extent.width), static_cast<float>(mSwapChainDetails.extent.height), 0.0f, 1.0f});
   mCommandBuffers[mFrameIdx].setScissor(0, vk::Rect2D(vk::Offset2D(0, 0), mSwapChainDetails.extent));
 
-  mCommandBuffers[mFrameIdx].bindVertexBuffers(0, *mVertexBuffer, {0});
-  mCommandBuffers[mFrameIdx].bindIndexBuffer(mIndexBuffer, 0, vk::IndexType::eUint16);
+  mCommandBuffers[mFrameIdx].bindVertexBuffers(0, *mVertexBuffer->buffer, {0});
+  mCommandBuffers[mFrameIdx].bindIndexBuffer(mIndexBuffer->buffer, 0, vk::IndexType::eUint16);
   mCommandBuffers[mFrameIdx].bindDescriptorSets(vk::PipelineBindPoint::eGraphics, mPipelineLayout, 0, *mDescriptorSets[mFrameIdx], nullptr);
   mCommandBuffers[mFrameIdx].drawIndexed(mesh.indices.size(), 1, 0, 0, 0);
 
@@ -913,36 +904,6 @@ void Renderer::recreateSwapChain() {
   createSwapChain();
   createImageViews();
   createDepthResources();
-}
-
-uint32_t Renderer::findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties) {
-  auto memProperties = mPhysicalDevice.getMemoryProperties();
-
-  for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++)
-    if ((typeFilter & (1 << i)) && (memProperties.memoryTypes[i].propertyFlags & properties) == properties) return i;
-
-  MAPLE_FATAL("Failed to find suitable memory type");
-}
-
-void Renderer::createBuffer(vk::DeviceSize size,
-                            vk::BufferUsageFlags usage,
-                            vk::MemoryPropertyFlags properties,
-                            vk::raii::Buffer& buffer,
-                            vk::raii::DeviceMemory& bufferMemory) {
-  vk::BufferCreateInfo bufferInfo{.size = size, .usage = usage, .sharingMode = vk::SharingMode::eExclusive};
-  buffer = vk::raii::Buffer(mDevice, bufferInfo);
-  vk::MemoryRequirements memRequirements = buffer.getMemoryRequirements();
-  vk::MemoryAllocateInfo allocInfo{.allocationSize = memRequirements.size,
-                                   .memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, properties)};
-  bufferMemory = vk::raii::DeviceMemory(mDevice, allocInfo);
-  buffer.bindMemory(*bufferMemory, 0);
-}
-
-void Renderer::copyBuffer(vk::raii::Buffer& srcBuffer, vk::raii::Buffer& dstBuffer, vk::DeviceSize size) {
-  auto commandCopyBuffer = beginSingleTimeCommands();
-  vk::BufferCopy copyRegion{.srcOffset = 0, .dstOffset = 0, .size = size};
-  commandCopyBuffer.copyBuffer(*srcBuffer, *dstBuffer, copyRegion);
-  endSingleTimeCommands(commandCopyBuffer);
 }
 
 void Renderer::createImage(glm::u32vec2 size,
