@@ -55,28 +55,46 @@ bool deviceSupportsExtension(vk::raii::PhysicalDevice device, const char* extens
 }
 
 struct QueueFamilyIndices {
-  uint32_t graphics, present, compute;
-  bool hasGraphics() { return graphics != VK_QUEUE_FAMILY_IGNORED; }
-  bool hasPresent() { return present != VK_QUEUE_FAMILY_IGNORED; }
-  bool hasCompute() { return compute != VK_QUEUE_FAMILY_IGNORED; }
-  bool complete() { return hasGraphics() && hasPresent() && hasCompute(); }
+  uint32_t graphics, present, compute, transfer;
+  bool hasGraphics() const { return graphics != VK_QUEUE_FAMILY_IGNORED; }
+  bool hasPresent() const { return present != VK_QUEUE_FAMILY_IGNORED; }
+  bool hasCompute() const { return compute != VK_QUEUE_FAMILY_IGNORED; }
+  bool hasTransfer() const { return transfer != VK_QUEUE_FAMILY_IGNORED; }
+  bool complete() const { return hasGraphics() && hasPresent() && hasCompute() && hasTransfer(); }
 };
 
 QueueFamilyIndices getDeviceQueueFamilyIndices(vk::raii::PhysicalDevice device, vk::SurfaceKHR surface) {
-  QueueFamilyIndices indices = {VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED};
+  QueueFamilyIndices indices = {VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED};
 
-  for (auto [i, qfp] : std::views::enumerate(device.getQueueFamilyProperties())) {
-    bool graphics = static_cast<bool>(qfp.queueFlags & vk::QueueFlagBits::eGraphics);
+  auto qFamilyProps = device.getQueueFamilyProperties();
+  auto graphicsBit = vk::QueueFlagBits::eGraphics;
+  auto computeBit = vk::QueueFlagBits::eCompute;
+  auto transferBit = vk::QueueFlagBits::eTransfer;
+
+  for (auto [i, qfp] : std::views::enumerate(qFamilyProps)) {
+    bool graphics = static_cast<bool>(qfp.queueFlags & graphicsBit);
     indices.graphics = graphics && !indices.hasGraphics() ? static_cast<uint32_t>(i) : indices.graphics;
 
     bool present = device.getSurfaceSupportKHR(i, surface);
     indices.present = present && !indices.hasPresent() ? static_cast<uint32_t>(i) : indices.present;
 
-    bool compute = static_cast<bool>(qfp.queueFlags & vk::QueueFlagBits::eCompute);
+    // Ideally select a dedicated compute queue that doesn't have graphics
+    bool compute = static_cast<bool>((qfp.queueFlags & computeBit) && !(qfp.queueFlags & graphicsBit));
     indices.compute = compute && !indices.hasCompute() ? static_cast<uint32_t>(i) : indices.compute;
+
+    // Ideally select a dedicated transfer queue that doesn't have graphics or compute
+    bool transfer = static_cast<bool>((qfp.queueFlags & transferBit) && !(qfp.queueFlags & (graphicsBit | computeBit)));
+    indices.transfer = transfer && !indices.hasTransfer() ? static_cast<uint32_t>(i) : indices.transfer;
 
     if (indices.complete()) break;
   }
+
+  // If didn't find a dedicated compute family, but graphics family also has compute, fallback to graphics family for compute
+  if (!indices.hasCompute() && indices.hasGraphics() && (qFamilyProps[indices.graphics].queueFlags & computeBit)) indices.compute = indices.graphics;
+
+  // If didn't find a dedicated transfer family, fallback to compute, then graphics
+  if (!indices.hasTransfer() && indices.hasCompute()) indices.transfer = indices.compute;
+  if (!indices.hasTransfer() && indices.hasGraphics()) indices.transfer = indices.graphics;
 
   return indices;
 }
