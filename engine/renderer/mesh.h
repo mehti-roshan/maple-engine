@@ -13,11 +13,6 @@ concept VertexType = requires {
 template <typename T>
 concept IndexType = std::is_same_v<T, uint16_t> || std::is_same_v<T, uint32_t>;
 
-enum class IndexFormat {
-  UINT16,
-  UINT32,
-};
-
 template <VertexType VertexT, IndexType IndexT>
 struct Mesh {
   std::vector<VertexT> vertices;
