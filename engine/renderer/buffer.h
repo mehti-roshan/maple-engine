@@ -1,5 +1,4 @@
 #pragma once
-#include <cassert>
 #define VULKAN_HPP_NO_STRUCT_CONSTRUCTORS
 #include <engine/logging/log_macros.h>
 
