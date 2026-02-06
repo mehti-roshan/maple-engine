@@ -10,12 +10,12 @@
 #include <map>
 #include <ranges>
 #include <vector>
-#include <vulkan/vulkan_enums.hpp>
-#include <vulkan/vulkan_handles.hpp>
 #include <vulkan/vulkan_raii.hpp>
-#include <vulkan/vulkan_structs.hpp>
 
-#include "engine/renderer/buffer.h"
+#include "engine/renderer/vk_buffer.h"
+#include "engine/renderer/vk_sampler.h"
+#include "engine/renderer/vk_texture.h"
+
 #define GLM_FORCE_RADIANS
 #include <glm/ext/matrix_clip_space.hpp>
 #include <glm/ext/matrix_transform.hpp>
@@ -23,7 +23,7 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #define STB_IMAGE_IMPLEMENTATION
-#include <engine/stb/stb_image.h>
+#include <engine/third_party/stb_image.h>
 
 #include "mesh.h"
 
@@ -44,8 +44,6 @@ static VKAPI_ATTR vk::Bool32 VKAPI_CALL debugCallback(vk::DebugUtilsMessageSever
   MAPLE_DEBUG("Vulkan validation layer: type {} msg: {}", to_string(type), pCallbackData->pMessage);
   return vk::False;
 }
-
-constexpr int MAX_FRAMES_IN_FLIGHT = 2;
 
 bool deviceSupportsExtension(vk::raii::PhysicalDevice device, const char* extensionName) {
   auto extensions = device.enumerateDeviceExtensionProperties();
@@ -245,30 +243,29 @@ void Renderer::Init(const std::vector<const char*>& glfwExtensions, SurfaceCreat
   mSurface = vk::raii::SurfaceKHR(mInstance, surfaceCallback(*mInstance));
   pickPhysicalDevice();
   createLogicalDevice();
+  createMemoryManager();
   createSwapChain();
   createImageViews();
   createDescriptorSetLayout();
   createGraphicsPipeline();
-  createCommandPool();
+  createCommandPools();
   createDepthResources();
-  createTextureImage();
-  createTextureImageView();
+  createFrameData();
+  createTexture();
   createTextureSampler();
   createVertexBuffer();
   createIndexBuffer();
   createUniformBuffers();
   createDescriptorPool();
   createDescriptorSets();
-  createCommandBuffers();
-  createSyncObjects();
 }
 
 void Renderer::DrawFrame() {
-  auto fenceResult = mDevice.waitForFences(*mDrawFences[mFrameIdx], vk::True, UINT64_MAX);
-  auto [result, imageIdx] = mSwapChain.acquireNextImage(UINT64_MAX, *mPresentCompleteSems[mFrameIdx], nullptr);
-  mDevice.resetFences(*mDrawFences[mFrameIdx]);
+  auto fenceResult = mDevice.waitForFences(*mFrameData[mFrameIdx].drawFence, vk::True, UINT64_MAX);
+  auto [result, imageIdx] = mSwapChain.acquireNextImage(UINT64_MAX, mFrameData[mFrameIdx].presentCompleteSem, nullptr);
+  mDevice.resetFences(*mFrameData[mFrameIdx].drawFence);
 
-  mCommandBuffers[mFrameIdx].reset();
+  mFrameData[mFrameIdx].cmd.reset();
 
   updateUniformBuffer(mFrameIdx);
   recordCommandBuffer(imageIdx);
@@ -276,25 +273,25 @@ void Renderer::DrawFrame() {
   vk::PipelineStageFlags waitDestinationStageMask(vk::PipelineStageFlagBits::eColorAttachmentOutput);
   const vk::SubmitInfo submitInfo{
     .waitSemaphoreCount = 1,
-    .pWaitSemaphores = &*mPresentCompleteSems[mFrameIdx],
+    .pWaitSemaphores = &*mFrameData[mFrameIdx].presentCompleteSem,
     .pWaitDstStageMask = &waitDestinationStageMask,
     .commandBufferCount = 1,
-    .pCommandBuffers = &*mCommandBuffers[mFrameIdx],
+    .pCommandBuffers = &*mFrameData[mFrameIdx].cmd,
     .signalSemaphoreCount = 1,
-    .pSignalSemaphores = &*mRenderCompleteSems[mFrameIdx],
+    .pSignalSemaphores = &*mFrameData[mFrameIdx].renderCompleteSem,
   };
 
-  mGraphicsQueue.submit(submitInfo, *mDrawFences[mFrameIdx]);
+  mQueues.graphics.submit(submitInfo, *mFrameData[mFrameIdx].drawFence);
 
   const vk::PresentInfoKHR presentInfoKHR{
     .waitSemaphoreCount = 1,
-    .pWaitSemaphores = &*mRenderCompleteSems[mFrameIdx],
+    .pWaitSemaphores = &*mFrameData[mFrameIdx].renderCompleteSem,
     .swapchainCount = 1,
     .pSwapchains = &*mSwapChain,
     .pImageIndices = &imageIdx,
   };
 
-  auto presentResult = mPresentQueue.presentKHR(presentInfoKHR);
+  auto presentResult = mQueues.present.presentKHR(presentInfoKHR);
 
   if (presentResult == vk::Result::eErrorOutOfDateKHR || presentResult == vk::Result::eSuboptimalKHR || mFrameBufferResized) {
     mFrameBufferResized = false;
@@ -319,7 +316,7 @@ void Renderer::updateUniformBuffer(uint32_t currentImage) {
       glm::radians(45.0f), static_cast<float>(mSwapChainDetails.extent.width) / static_cast<float>(mSwapChainDetails.extent.height), 0.1f, 2000.0f)};
   ubo.proj[1][1] *= -1;  // Invert Y for Vulkan
 
-  memcpy(mUniformBuffers[currentImage].second, &ubo, sizeof(ubo));
+  mUniformBuffers[currentImage].Upload(&ubo, sizeof(ubo));
 }
 
 void Renderer::createInstance(const std::vector<const char*>& glfwExtensions) {
@@ -393,7 +390,6 @@ void Renderer::pickPhysicalDevice() {
 }
 
 void Renderer::createLogicalDevice() {
-  // std::vector<vk::QueueFamilyProperties> queueFamilyProperties = mPhysicalDevice.getQueueFamilyProperties();
   QueueFamilyIndices qIndices = getDeviceQueueFamilyIndices(mPhysicalDevice, *mSurface);
 
   float queuePriority = 0.5f;
@@ -420,11 +416,15 @@ void Renderer::createLogicalDevice() {
 
   mDevice = vk::raii::Device(mPhysicalDevice, deviceCreateInfo);
 
-  VkBool32 presentSupport = mPhysicalDevice.getSurfaceSupportKHR(qIndices.graphics, *mSurface);
-
-  mGraphicsQueue = vk::raii::Queue(mDevice, qIndices.graphics, 0);
-  mPresentQueue = qIndices.graphics == qIndices.present ? mGraphicsQueue : vk::raii::Queue(mDevice, qIndices.present, 0);
+  mQueues = {
+    .graphics = vk::raii::Queue(mDevice, qIndices.graphics, 0),
+    .present = vk::raii::Queue(mDevice, qIndices.present, 0),
+    .tranfer = vk::raii::Queue(mDevice, qIndices.transfer, 0),
+    .compute = vk::raii::Queue(mDevice, qIndices.compute, 0),
+  };
 }
+
+void Renderer::createMemoryManager() { mMemoryManager = VulkanMemoryManager(mInstance, mPhysicalDevice, mDevice); }
 
 void Renderer::createSwapChain() {
   auto surfaceCapabilities = mPhysicalDevice.getSurfaceCapabilitiesKHR(*mSurface);
@@ -525,8 +525,8 @@ void Renderer::createGraphicsPipeline() {
     .pDynamicStates = dynamicStates.data(),
   };
 
-  auto bindingDescription = mesh.getBindingDescription();
-  auto attributeDescriptions = mesh.getAttributeDescriptions();
+  auto bindingDescription = mesh.GetBindingDescription();
+  auto attributeDescriptions = mesh.GetAttributeDescriptions();
   vk::PipelineVertexInputStateCreateInfo vertexInputInfo{
     .vertexBindingDescriptionCount = 1,
     .pVertexBindingDescriptions = &bindingDescription,
@@ -600,71 +600,60 @@ void Renderer::createGraphicsPipeline() {
   mGraphicsPipeline = vk::raii::Pipeline(mDevice, nullptr, pipelineInfo);
 }
 
-void Renderer::createCommandPool() {
+void Renderer::createCommandPools() {
   QueueFamilyIndices qIndices = getDeviceQueueFamilyIndices(mPhysicalDevice, *mSurface);
 
-  vk::CommandPoolCreateInfo poolInfo{
-    .flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
-    .queueFamilyIndex = qIndices.graphics,
-  };
+  vk::CommandPoolCreateInfo poolInfo{};
+  poolInfo.flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer;
+  poolInfo.queueFamilyIndex = qIndices.graphics;
 
-  mCommandPool = vk::raii::CommandPool(mDevice, poolInfo);
+  mCommandPools.graphics = vk::raii::CommandPool(mDevice, poolInfo);
+
+  poolInfo.flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer;
+  poolInfo.queueFamilyIndex = qIndices.transfer;
+  mCommandPools.transfer = vk::raii::CommandPool(mDevice, poolInfo);
 }
 
 void Renderer::createDepthResources() {
   vk::Format depthFormat = findDepthFormat();
-  createImage(glm::u32vec2(mSwapChainDetails.extent.width, mSwapChainDetails.extent.height),
-              depthFormat,
-              vk::ImageTiling::eOptimal,
-              vk::ImageUsageFlagBits::eDepthStencilAttachment,
-              vk::MemoryPropertyFlagBits::eDeviceLocal,
-              mDepthImage,
-              mDepthImageMemory);
-
-  mDepthImageView = createImageView(mDepthImage, depthFormat, vk::ImageAspectFlagBits::eDepth);
+  mDepthImage = VulkanTexture(*mDevice,
+                              mMemoryManager.get(),
+                              {mSwapChainDetails.extent.width, mSwapChainDetails.extent.height, 1},
+                              depthFormat,
+                              vk::ImageUsageFlagBits::eDepthStencilAttachment,
+                              vk::ImageAspectFlagBits::eDepth);
 }
 
-void Renderer::createTextureImage() {
+void Renderer::createTexture() {
   int32_t texWidth, texHeight, texChannels;
   stbi_uc* pixels = stbi_load("assets/textures/viking_room.png", &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
   vk::DeviceSize imageSize = texWidth * texHeight * 4;
 
   if (!pixels) MAPLE_FATAL("failed to load texture image");
 
-  Buffer stage({
-    .device = mDevice,
-    .physicalDevice = mPhysicalDevice,
-    .size = imageSize,
-    .usage = vk::BufferUsageFlagBits::eTransferSrc,
-    .properties = vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
-  });
+  auto stage = mMemoryManager.createBuffer(imageSize,
+                                           vk::BufferUsageFlagBits::eTransferSrc,
+                                           VMA_MEMORY_USAGE_AUTO,
+                                           VMA_ALLOCATION_CREATE_MAPPED_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
 
-  void* data = stage.MapMemory(0, imageSize);
-  memcpy(data, pixels, imageSize);
-  stage.UnMapMemory();
-
+  stage.Upload(pixels, stage.size);
   stbi_image_free(pixels);
 
-  createImage(glm::u32vec2(texWidth, texHeight),
-              vk::Format::eR8G8B8A8Srgb,
-              vk::ImageTiling::eOptimal,
-              vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
-              vk::MemoryPropertyFlagBits::eDeviceLocal,
-              mTextureImage,
-              mTextureImageMemory);
+  mTexture = VulkanTexture(*mDevice,
+                           mMemoryManager.get(),
+                           {static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight), 1},
+                           vk::Format::eR8G8B8A8Srgb,
+                           vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
+                           vk::ImageAspectFlagBits::eColor);
 
-  transitionImageLayout(mTextureImage, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);
-  copyBufferToImage(stage.buffer, mTextureImage, texWidth, texHeight);
-  transitionImageLayout(mTextureImage, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal);
-}
-
-void Renderer::createTextureImageView() {
-  mTextureImageView = createImageView(mTextureImage, vk::Format::eR8G8B8A8Srgb, vk::ImageAspectFlagBits::eColor);
+  auto cmd = beginSingleTimeCommands();
+  mTexture.image.TransitionLayout(cmd, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);
+  mTexture.image.UploadBuffer(cmd, stage, texWidth, texHeight);
+  mTexture.image.TransitionLayout(cmd, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal);
+  endSingleTimeCommands(cmd);
 }
 
 void Renderer::createTextureSampler() {
-  vk::PhysicalDeviceProperties properties = mPhysicalDevice.getProperties();
-
   vk::SamplerCreateInfo samplerInfo{
     .magFilter = vk::Filter::eLinear,
     .minFilter = vk::Filter::eLinear,
@@ -674,7 +663,7 @@ void Renderer::createTextureSampler() {
     .addressModeW = vk::SamplerAddressMode::eRepeat,
     .mipLodBias = 0.0f,
     .anisotropyEnable = vk::True,
-    .maxAnisotropy = properties.limits.maxSamplerAnisotropy,
+    .maxAnisotropy = mPhysicalDevice.getProperties().limits.maxSamplerAnisotropy,
     .compareEnable = vk::False,
     .compareOp = vk::CompareOp::eAlways,
     .minLod = 0.0f,
@@ -683,72 +672,47 @@ void Renderer::createTextureSampler() {
     .unnormalizedCoordinates = vk::False,
   };
 
-  mTextureSampler = vk::raii::Sampler(mDevice, samplerInfo);
+  mSampler = VulkanSampler(*mDevice, samplerInfo);
 }
 
 void Renderer::createVertexBuffer() {
-  Buffer stage(BufferCreateInfo{
-    .device = mDevice,
-    .physicalDevice = mPhysicalDevice,
-    .size = sizeof(mesh.vertices[0]) * mesh.vertices.size(),
-    .usage = vk::BufferUsageFlagBits::eTransferSrc,
-    .properties = vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
-  });
+  auto stage = mMemoryManager.createBuffer(sizeof(mesh.vertices[0]) * mesh.vertices.size(),
+                                           vk::BufferUsageFlagBits::eTransferSrc,
+                                           VMA_MEMORY_USAGE_AUTO,
+                                           VMA_ALLOCATION_CREATE_MAPPED_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
 
-  void* data = stage.MapMemory(0, stage.size);
-  memcpy(data, mesh.vertices.data(), stage.size);
-  stage.UnMapMemory();
+  stage.Upload(mesh.vertices.data(), stage.size);
 
-  mVertexBuffer = Buffer(BufferCreateInfo{
-    .device = mDevice,
-    .physicalDevice = mPhysicalDevice,
-    .size = stage.size,
-    .usage = vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst,
-    .properties = vk::MemoryPropertyFlagBits::eDeviceLocal,
-  });
+  mVertexBuffer =
+    mMemoryManager.createBuffer(stage.size, vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eVertexBuffer, VMA_MEMORY_USAGE_AUTO, 0);
 
-  copyBuffer(stage.buffer, mVertexBuffer->buffer, stage.size);
+  copyBuffer(stage.buffer, mVertexBuffer.buffer, stage.size);
 }
 
 void Renderer::createIndexBuffer() {
-  Buffer stage(BufferCreateInfo{
-    .device = mDevice,
-    .physicalDevice = mPhysicalDevice,
-    .size = sizeof(mesh.indices[0]) * mesh.indices.size(),
-    .usage = vk::BufferUsageFlagBits::eTransferSrc,
-    .properties = vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
-  });
+  auto stage = mMemoryManager.createBuffer(sizeof(mesh.indices[0]) * mesh.indices.size(),
+                                           vk::BufferUsageFlagBits::eTransferSrc,
+                                           VMA_MEMORY_USAGE_AUTO,
+                                           VMA_ALLOCATION_CREATE_MAPPED_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
 
-  void* data = stage.MapMemory(0, stage.size);
-  memcpy(data, mesh.indices.data(), (size_t)stage.size);
-  stage.UnMapMemory();
+  stage.Upload(mesh.indices.data(), stage.size);
 
-  mIndexBuffer = Buffer(BufferCreateInfo{.device = mDevice,
-                                         .physicalDevice = mPhysicalDevice,
-                                         .size = stage.size,
-                                         .usage = vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eIndexBuffer,
-                                         .properties = vk::MemoryPropertyFlagBits::eDeviceLocal});
+  mIndexBuffer =
+    mMemoryManager.createBuffer(stage.size, vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eIndexBuffer, VMA_MEMORY_USAGE_AUTO, 0);
 
-  copyBuffer(stage.buffer, mIndexBuffer->buffer, stage.size);
+  copyBuffer(stage.buffer, mIndexBuffer.buffer, stage.size);
 }
 
 void Renderer::createUniformBuffers() {
   mUniformBuffers.clear();
 
+  vk::DeviceSize bufferSize = sizeof(UniformBufferObject);
   for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-    vk::DeviceSize bufferSize = sizeof(UniformBufferObject);
-
-    mUniformBuffers.emplace_back(
-      BufferCreateInfo{
-        .device = mDevice,
-        .physicalDevice = mPhysicalDevice,
-        .size = bufferSize,
-        .usage = vk::BufferUsageFlagBits::eUniformBuffer,
-        .properties = vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
-      },
-      nullptr);
-
-    mUniformBuffers[i].second = mUniformBuffers[i].first->MapMemory(0, bufferSize);
+    // With the correct flags vma will automatically map the memory and persist it, no need to map once and store the pointers
+    mUniformBuffers.push_back(mMemoryManager.createBuffer(bufferSize,
+                                                          vk::BufferUsageFlagBits::eUniformBuffer,
+                                                          VMA_MEMORY_USAGE_AUTO,
+                                                          VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT));
   }
 }
 
@@ -764,28 +728,16 @@ void Renderer::createDescriptorPool() {
   mDescriptorPool = vk::raii::DescriptorPool(mDevice, poolInfo);
 }
 
-void Renderer::createCommandBuffers() {
-  mCommandBuffers.clear();
-
-  vk::CommandBufferAllocateInfo allocInfo{
-    .commandPool = mCommandPool,
-    .level = vk::CommandBufferLevel::ePrimary,
-    .commandBufferCount = static_cast<uint32_t>(mSwapChainImages.size()),
-  };
-
-  mCommandBuffers = vk::raii::CommandBuffers(mDevice, allocInfo);
-}
-
 void Renderer::createDescriptorSets() {
   std::vector<vk::DescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, *mDescriptorSetLayout);
   vk::DescriptorSetAllocateInfo allocInfo{
     .descriptorPool = mDescriptorPool, .descriptorSetCount = static_cast<uint32_t>(layouts.size()), .pSetLayouts = layouts.data()};
   mDescriptorSets = vk::raii::DescriptorSets(mDevice, allocInfo);
   for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-    vk::DescriptorBufferInfo bufferInfo{.buffer = mUniformBuffers[i].first->buffer, .offset = 0, .range = sizeof(UniformBufferObject)};
+    vk::DescriptorBufferInfo bufferInfo{.buffer = mUniformBuffers[i].buffer, .offset = 0, .range = sizeof(UniformBufferObject)};
     vk::DescriptorImageInfo imageInfo{
-      .sampler = mTextureSampler,
-      .imageView = mTextureImageView,
+      .sampler = mSampler.sampler,
+      .imageView = mTexture.view,
       .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
     };
 
@@ -813,11 +765,11 @@ void Renderer::createDescriptorSets() {
 }
 
 void Renderer::recordCommandBuffer(uint32_t imageIdx) {
-  mCommandBuffers[mFrameIdx].begin({});
+  mFrameData[mFrameIdx].cmd.begin({});
 
   // Color attachment transition
   transition_image_layout(mSwapChainImages[imageIdx],
-                          mCommandBuffers[mFrameIdx],
+                          mFrameData[mFrameIdx].cmd,
                           vk::ImageLayout::eUndefined,
                           vk::ImageLayout::eColorAttachmentOptimal,
                           {},
@@ -827,8 +779,8 @@ void Renderer::recordCommandBuffer(uint32_t imageIdx) {
                           vk::ImageAspectFlagBits::eColor);
 
   // Depth attachment transition
-  transition_image_layout(mDepthImage,
-                          mCommandBuffers[mFrameIdx],
+  transition_image_layout(mDepthImage.image.image,
+                          mFrameData[mFrameIdx].cmd,
                           vk::ImageLayout::eUndefined,
                           vk::ImageLayout::eDepthStencilAttachmentOptimal,
                           vk::AccessFlagBits2::eDepthStencilAttachmentRead,
@@ -840,7 +792,7 @@ void Renderer::recordCommandBuffer(uint32_t imageIdx) {
   vk::ClearValue clearColor = vk::ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f);
   vk::ClearValue clearDepth = vk::ClearDepthStencilValue(1.0f, 0);
   vk::RenderingAttachmentInfo depthAttachmentInfo = {
-    .imageView = mDepthImageView,
+    .imageView = mDepthImage.view,
     .imageLayout = vk::ImageLayout::eDepthAttachmentOptimal,
     .loadOp = vk::AttachmentLoadOp::eClear,
     .storeOp = vk::AttachmentStoreOp::eDontCare,
@@ -863,23 +815,23 @@ void Renderer::recordCommandBuffer(uint32_t imageIdx) {
     .pDepthAttachment = &depthAttachmentInfo,
   };
 
-  mCommandBuffers[mFrameIdx].beginRendering(renderingInfo);
+  mFrameData[mFrameIdx].cmd.beginRendering(renderingInfo);
 
-  mCommandBuffers[mFrameIdx].bindPipeline(vk::PipelineBindPoint::eGraphics, mGraphicsPipeline);
+  mFrameData[mFrameIdx].cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, mGraphicsPipeline);
 
-  mCommandBuffers[mFrameIdx].setViewport(
+  mFrameData[mFrameIdx].cmd.setViewport(
     0, vk::Viewport{0.0f, 0.0f, static_cast<float>(mSwapChainDetails.extent.width), static_cast<float>(mSwapChainDetails.extent.height), 0.0f, 1.0f});
-  mCommandBuffers[mFrameIdx].setScissor(0, vk::Rect2D(vk::Offset2D(0, 0), mSwapChainDetails.extent));
+  mFrameData[mFrameIdx].cmd.setScissor(0, vk::Rect2D(vk::Offset2D(0, 0), mSwapChainDetails.extent));
 
-  mCommandBuffers[mFrameIdx].bindVertexBuffers(0, *mVertexBuffer->buffer, {0});
-  mCommandBuffers[mFrameIdx].bindIndexBuffer(mIndexBuffer->buffer, 0, vk::IndexType::eUint16);
-  mCommandBuffers[mFrameIdx].bindDescriptorSets(vk::PipelineBindPoint::eGraphics, mPipelineLayout, 0, *mDescriptorSets[mFrameIdx], nullptr);
-  mCommandBuffers[mFrameIdx].drawIndexed(mesh.indices.size(), 1, 0, 0, 0);
+  mFrameData[mFrameIdx].cmd.bindVertexBuffers(0, {mVertexBuffer.buffer}, {0});
+  mFrameData[mFrameIdx].cmd.bindIndexBuffer(mIndexBuffer.buffer, 0, vk::IndexType::eUint16);
+  mFrameData[mFrameIdx].cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, mPipelineLayout, 0, *mDescriptorSets[mFrameIdx], nullptr);
+  mFrameData[mFrameIdx].cmd.drawIndexed(mesh.indices.size(), 1, 0, 0, 0);
 
-  mCommandBuffers[mFrameIdx].endRendering();
+  mFrameData[mFrameIdx].cmd.endRendering();
 
   transition_image_layout(mSwapChainImages[imageIdx],
-                          mCommandBuffers[mFrameIdx],
+                          mFrameData[mFrameIdx].cmd,
                           vk::ImageLayout::eColorAttachmentOptimal,
                           vk::ImageLayout::ePresentSrcKHR,
                           vk::AccessFlagBits2::eColorAttachmentWrite,
@@ -887,19 +839,29 @@ void Renderer::recordCommandBuffer(uint32_t imageIdx) {
                           vk::PipelineStageFlagBits2::eColorAttachmentOutput,
                           vk::PipelineStageFlagBits2::eBottomOfPipe,
                           vk::ImageAspectFlagBits::eColor);
-  mCommandBuffers[mFrameIdx].end();
+  mFrameData[mFrameIdx].cmd.end();
 }
 
-void Renderer::createSyncObjects() {
-  assert(mPresentCompleteSems.empty() && mRenderCompleteSems.empty() && mDrawFences.empty());
+void Renderer::createFrameData() {
+  mFrameData.clear();
+  mFrameData.resize(MAX_FRAMES_IN_FLIGHT);
 
-  for (size_t i = 0; i < mSwapChainImages.size(); i++) {
-    mRenderCompleteSems.emplace_back(mDevice, vk::SemaphoreCreateInfo{});
-  }
+  vk::CommandBufferAllocateInfo allocInfo{
+    .commandPool = mCommandPools.graphics,
+    .level = vk::CommandBufferLevel::ePrimary,
+    .commandBufferCount = MAX_FRAMES_IN_FLIGHT,
+  };
 
-  for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-    mPresentCompleteSems.emplace_back(mDevice, vk::SemaphoreCreateInfo{});
-    mDrawFences.emplace_back(mDevice, vk::FenceCreateInfo{.flags = vk::FenceCreateFlagBits::eSignaled});
+  vk::raii::CommandBuffers cmdBuffers(mDevice, allocInfo);
+
+  for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+    mFrameData[i].cmd = std::move(cmdBuffers[i]);
+
+    mFrameData[i].presentCompleteSem = vk::raii::Semaphore(mDevice, vk::SemaphoreCreateInfo{});
+
+    mFrameData[i].renderCompleteSem = vk::raii::Semaphore(mDevice, vk::SemaphoreCreateInfo{});
+
+    mFrameData[i].drawFence = vk::raii::Fence(mDevice, {.flags = vk::FenceCreateFlagBits::eSignaled});
   }
 }
 
@@ -922,32 +884,6 @@ void Renderer::recreateSwapChain() {
   createSwapChain();
   createImageViews();
   createDepthResources();
-}
-
-void Renderer::createImage(glm::u32vec2 size,
-                           vk::Format format,
-                           vk::ImageTiling tiling,
-                           vk::ImageUsageFlags usage,
-                           vk::MemoryPropertyFlags properties,
-                           vk::raii::Image& image,
-                           vk::raii::DeviceMemory& imageMemory) {
-  vk::ImageCreateInfo imageInfo{.imageType = vk::ImageType::e2D,
-                                .format = format,
-                                .extent = {size.x, size.y, 1},
-                                .mipLevels = 1,
-                                .arrayLayers = 1,
-                                .samples = vk::SampleCountFlagBits::e1,
-                                .tiling = tiling,
-                                .usage = usage,
-                                .sharingMode = vk::SharingMode::eExclusive};
-
-  image = vk::raii::Image(mDevice, imageInfo);
-
-  vk::MemoryRequirements memRequirements = image.getMemoryRequirements();
-  vk::MemoryAllocateInfo allocInfo{.allocationSize = memRequirements.size,
-                                   .memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, properties)};
-  imageMemory = vk::raii::DeviceMemory(mDevice, allocInfo);
-  image.bindMemory(imageMemory, 0);
 }
 
 }  // namespace maple

@@ -1,6 +1,7 @@
 #pragma once
-#include "log.h"
 #include <spdlog/spdlog.h>
+
+#include "log.h"
 
 #define MAPLE_INFO(...) ::maple::logging::Log::get()->info(__VA_ARGS__)
 #define MAPLE_WARN(...) ::maple::logging::Log::get()->warn(__VA_ARGS__)
@@ -11,3 +12,16 @@
     ::maple::logging::Log::get()->critical(__VA_ARGS__); \
     std::terminate();                                    \
   } while (0)
+
+// Assert macro
+#if defined(NDEBUG)
+#define MAPLE_ASSERT(cond, ...) ((void)0)
+#else
+#define MAPLE_ASSERT(cond, ...)                                                                             \
+  do {                                                                                                      \
+    if (!(cond)) {                                                                                          \
+      ::maple::logging::Log::get()->critical("Assertion failed: {} | {}", #cond, fmt::format(__VA_ARGS__)); \
+      std::abort();                                                                                         \
+    }                                                                                                       \
+  } while (0)
+#endif

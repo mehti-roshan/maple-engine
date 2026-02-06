@@ -20,7 +20,11 @@ struct Mesh {
 
   static constexpr vk::IndexType vkIndexType = std::is_same_v<IndexT, uint16_t> ? vk::IndexType::eUint16 : vk::IndexType::eUint32;
 
-  static vk::VertexInputBindingDescription getBindingDescription() { return VertexT::getBindingDescription(); }
+  static vk::VertexInputBindingDescription GetBindingDescription() { return VertexT::getBindingDescription(); }
 
-  static std::vector<vk::VertexInputAttributeDescription> getAttributeDescriptions() { return VertexT::getAttributeDescriptions(); }
+  static std::vector<vk::VertexInputAttributeDescription> GetAttributeDescriptions() { return VertexT::getAttributeDescriptions(); }
+
+  size_t GetVerticesSizeBytes() const {return sizeof(vertices[0]) * vertices.size(); }
+  size_t GetIndicesSizeBytes() const { return sizeof(indices[0]) * indices.size(); }
+  size_t GetTotalSizeBytes() const { return GetVerticesSizeBytes() + GetIndicesSizeBytes(); }
 };

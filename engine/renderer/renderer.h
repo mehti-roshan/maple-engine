@@ -1,11 +1,13 @@
 #pragma once
+
 #include <functional>
 #include <glm/fwd.hpp>
-#include <optional>
 #include <vector>
 
-#include "buffer.h"
-#include "engine/renderer/buffer.h"
+#include "engine/renderer/vk_buffer.h"
+#include "engine/renderer/vk_memory_manager.h"
+#include "engine/renderer/vk_sampler.h"
+#include "engine/renderer/vk_texture.h"
 #include "log_macros.h"
 
 #define VULKAN_HPP_NO_STRUCT_CONSTRUCTORS
@@ -14,6 +16,8 @@
 #else
 import vulkan_hpp;
 #endif
+
+#include <engine/third_party/vma/vk_mem_alloc.h>
 
 typedef struct VkInstance_T* VkInstance;
 typedef struct VkSurfaceKHR_T* VkSurfaceKHR;
@@ -28,8 +32,26 @@ struct SwapChainDetails {
   vk::Extent2D extent;
 };
 
-namespace maple {
+struct Queues {
+  vk::raii::Queue graphics = nullptr;
+  vk::raii::Queue present = nullptr;
+  vk::raii::Queue tranfer = nullptr;
+  vk::raii::Queue compute = nullptr;
+};
 
+struct CommandPools {
+  vk::raii::CommandPool graphics = nullptr;
+  vk::raii::CommandPool transfer = nullptr;
+};
+
+struct FrameData {
+  vk::raii::CommandBuffer cmd = nullptr;
+  vk::raii::Semaphore presentCompleteSem = nullptr;
+  vk::raii::Semaphore renderCompleteSem = nullptr;
+  vk::raii::Fence drawFence = nullptr;
+};
+
+namespace maple {
 class Renderer {
  public:
   ~Renderer() { mDevice.waitIdle(); }
@@ -40,9 +62,11 @@ class Renderer {
   void SetFrameBufferResized() { mFrameBufferResized = true; }
 
  private:
-  FrameBufferSizeCallback mFrameBufferSizeCallback;
+  static constexpr int MAX_FRAMES_IN_FLIGHT = 2;
+
   bool mFrameBufferResized = false;
   uint32_t mFrameIdx = 0;
+  FrameBufferSizeCallback mFrameBufferSizeCallback;
 
   vk::raii::Context mContext;
   vk::raii::Instance mInstance = nullptr;
@@ -50,8 +74,8 @@ class Renderer {
   vk::raii::SurfaceKHR mSurface = nullptr;
   vk::raii::PhysicalDevice mPhysicalDevice = nullptr;
   vk::raii::Device mDevice = nullptr;
-  vk::raii::Queue mGraphicsQueue = nullptr;
-  vk::raii::Queue mPresentQueue = nullptr;
+  VulkanMemoryManager mMemoryManager;
+  Queues mQueues;
   vk::raii::SwapchainKHR mSwapChain = nullptr;
   SwapChainDetails mSwapChainDetails;
   std::vector<vk::Image> mSwapChainImages;
@@ -63,133 +87,52 @@ class Renderer {
   vk::raii::PipelineLayout mPipelineLayout = nullptr;
   vk::raii::Pipeline mGraphicsPipeline = nullptr;
 
-  vk::raii::CommandPool mCommandPool = nullptr;
-  std::vector<vk::raii::CommandBuffer> mCommandBuffers;
+  CommandPools mCommandPools;
+  // TODO: implement
+  // std::vector<VulkanBuffer> mPendingUploads;
+  // vk::raii::CommandBuffer mTransferCmd = nullptr;
+  // vk::raii::Fence mPendingUploadFence = nullptr;
+  std::vector<FrameData> mFrameData;
 
-  std::vector<vk::raii::Semaphore> mPresentCompleteSems;
-  std::vector<vk::raii::Semaphore> mRenderCompleteSems;
-  std::vector<vk::raii::Fence> mDrawFences;
+  VulkanBuffer mVertexBuffer;
+  VulkanBuffer mIndexBuffer;
 
-  std::optional<Buffer> mVertexBuffer = std::nullopt;
-  std::optional<Buffer> mIndexBuffer = std::nullopt;
+  std::vector<VulkanBuffer> mUniformBuffers;
 
-  std::vector<std::pair<std::optional<Buffer>, void*>> mUniformBuffers;  // Buffer and mapped pointer
+  VulkanTexture mDepthImage;
 
-  vk::raii::Image mDepthImage = nullptr;
-  vk::raii::DeviceMemory mDepthImageMemory = nullptr;
-  vk::raii::ImageView mDepthImageView = nullptr;
-
-  vk::raii::Image mTextureImage = nullptr;
-  vk::raii::DeviceMemory mTextureImageMemory = nullptr;
-  vk::raii::ImageView mTextureImageView = nullptr;
-  vk::raii::Sampler mTextureSampler = nullptr;
+  VulkanTexture mTexture;
+  VulkanSampler mSampler;
 
   void createInstance(const std::vector<const char*>& glfwExtensions);
   void setupDebugMessenger();
   void pickPhysicalDevice();
   void createLogicalDevice();
+  void createMemoryManager();
   void createSwapChain();
   void createImageViews();
-  void createGraphicsPipeline();
   void createDescriptorSetLayout();
-  void createCommandPool();
+  void createGraphicsPipeline();
+  void createCommandPools();
   void createDepthResources();
-  void createTextureImage();
-  void createTextureImageView();
-  void createTextureSampler();
-  void createVertexBuffer();
-  void createIndexBuffer();
   void createUniformBuffers();
   void createDescriptorPool();
   void createDescriptorSets();
-  void updateUniformBuffer(uint32_t currentImage);
-  void createCommandBuffers();
-  void recordCommandBuffer(uint32_t imageIdx);
-  void createSyncObjects();
+  // TODO: implement
+  // void createTransferData();
+
+  void createFrameData();
+
+  void createTexture();
+  void createTextureSampler();
+  void createVertexBuffer();
+  void createIndexBuffer();
 
   void recreateSwapChain();
   void cleanupSwapChain();
 
-  void copyBuffer(vk::raii::Buffer& srcBuffer, vk::raii::Buffer& dstBuffer, vk::DeviceSize size) {
-    auto commandCopyBuffer = beginSingleTimeCommands();
-    vk::BufferCopy copyRegion{.srcOffset = 0, .dstOffset = 0, .size = size};
-    commandCopyBuffer.copyBuffer(*srcBuffer, *dstBuffer, copyRegion);
-    endSingleTimeCommands(commandCopyBuffer);
-  }
-  
-  void createImage(
-    glm::u32vec2 size, vk::Format, vk::ImageTiling, vk::ImageUsageFlags, vk::MemoryPropertyFlags, vk::raii::Image&, vk::raii::DeviceMemory&);
-
-  vk::raii::CommandBuffer beginSingleTimeCommands() {
-    vk::CommandBufferAllocateInfo allocInfo{.commandPool = mCommandPool, .level = vk::CommandBufferLevel::ePrimary, .commandBufferCount = 1};
-    vk::raii::CommandBuffer commandBuffer = std::move(mDevice.allocateCommandBuffers(allocInfo).front());
-
-    vk::CommandBufferBeginInfo beginInfo{.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit};
-    commandBuffer.begin(beginInfo);
-
-    return commandBuffer;
-  }
-
-  void endSingleTimeCommands(vk::raii::CommandBuffer& commandBuffer) {
-    commandBuffer.end();
-
-    vk::SubmitInfo submitInfo{.commandBufferCount = 1, .pCommandBuffers = &*commandBuffer};
-    mGraphicsQueue.submit(submitInfo, nullptr);
-    mGraphicsQueue.waitIdle();
-  }
-
-  void transitionImageLayout(const vk::raii::Image& image, vk::ImageLayout oldLayout, vk::ImageLayout newLayout) {
-    auto commandBuffer = beginSingleTimeCommands();
-
-    vk::ImageMemoryBarrier barrier{
-      .oldLayout = oldLayout, .newLayout = newLayout, .image = image, .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}};
-
-    vk::PipelineStageFlags sourceStage;
-    vk::PipelineStageFlags destinationStage;
-
-    if (oldLayout == vk::ImageLayout::eUndefined && newLayout == vk::ImageLayout::eTransferDstOptimal) {
-      barrier.srcAccessMask = {};
-      barrier.dstAccessMask = vk::AccessFlagBits::eTransferWrite;
-
-      sourceStage = vk::PipelineStageFlagBits::eTopOfPipe;
-      destinationStage = vk::PipelineStageFlagBits::eTransfer;
-    } else if (oldLayout == vk::ImageLayout::eTransferDstOptimal && newLayout == vk::ImageLayout::eShaderReadOnlyOptimal) {
-      barrier.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
-      barrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
-
-      sourceStage = vk::PipelineStageFlagBits::eTransfer;
-      destinationStage = vk::PipelineStageFlagBits::eFragmentShader;
-    } else {
-      MAPLE_FATAL("Unsupported layout transition");
-    }
-    commandBuffer.pipelineBarrier(sourceStage, destinationStage, {}, {}, nullptr, barrier);
-    endSingleTimeCommands(commandBuffer);
-  }
-
-  void copyBufferToImage(const vk::raii::Buffer& buffer, vk::raii::Image& image, uint32_t width, uint32_t height) {
-    vk::raii::CommandBuffer commandBuffer = beginSingleTimeCommands();
-    vk::BufferImageCopy region{.bufferOffset = 0,
-                               .bufferRowLength = 0,
-                               .bufferImageHeight = 0,
-                               .imageSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
-                               .imageOffset = {0, 0, 0},
-                               .imageExtent = {width, height, 1}};
-    commandBuffer.copyBufferToImage(*buffer, *image, vk::ImageLayout::eTransferDstOptimal, region);
-    endSingleTimeCommands(commandBuffer);
-  }
-
-  vk::raii::ImageView createImageView(const vk::raii::Image& image, vk::Format format, vk::ImageAspectFlagBits aspectFlags) {
-    vk::ImageViewCreateInfo viewInfo{
-      .image = image,
-      .viewType = vk::ImageViewType::e2D,
-      .format = format,
-      .components = {.r = vk::ComponentSwizzle::eIdentity,
-                     .g = vk::ComponentSwizzle::eIdentity,
-                     .b = vk::ComponentSwizzle::eIdentity,
-                     .a = vk::ComponentSwizzle::eIdentity},
-      .subresourceRange = {.aspectMask = aspectFlags, .baseMipLevel = 0, .levelCount = 1, .baseArrayLayer = 0, .layerCount = 1}};
-    return vk::raii::ImageView(mDevice, viewInfo);
-  }
+  void recordCommandBuffer(uint32_t imageIdx);
+  void updateUniformBuffer(uint32_t currentImage);
 
   vk::Format findSupportedFormat(const std::vector<vk::Format>& candidates, vk::ImageTiling tiling, vk::FormatFeatureFlags features) {
     for (vk::Format format : candidates) {
@@ -211,15 +154,28 @@ class Renderer {
                                vk::FormatFeatureFlagBits::eDepthStencilAttachment);
   }
 
-  bool hasStencilComponent(vk::Format format) { return format == vk::Format::eD32SfloatS8Uint || format == vk::Format::eD24UnormS8Uint; }
+  void copyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, vk::DeviceSize size) {
+    auto commandCopyBuffer = beginSingleTimeCommands();
+    vk::BufferCopy copyRegion{.srcOffset = 0, .dstOffset = 0, .size = size};
+    commandCopyBuffer.copyBuffer(srcBuffer, dstBuffer, copyRegion);
+    endSingleTimeCommands(commandCopyBuffer);
+  }
 
-  uint32_t findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties) {
-    auto memProperties = mPhysicalDevice.getMemoryProperties();
+  [[nodiscard]]
+  vk::raii::CommandBuffer beginSingleTimeCommands() {
+    vk::CommandBufferAllocateInfo allocInfo{
+      .commandPool = mCommandPools.graphics, .level = vk::CommandBufferLevel::ePrimary, .commandBufferCount = 1};
+    vk::raii::CommandBuffer commandBuffer = std::move(mDevice.allocateCommandBuffers(allocInfo).front());
+    vk::CommandBufferBeginInfo beginInfo{.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit};
+    commandBuffer.begin(beginInfo);
+    return commandBuffer;
+  }
 
-    for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++)
-      if ((typeFilter & (1 << i)) && (memProperties.memoryTypes[i].propertyFlags & properties) == properties) return i;
-
-    MAPLE_FATAL("Failed to find suitable memory type");
+  void endSingleTimeCommands(vk::raii::CommandBuffer& commandBuffer) {
+    commandBuffer.end();
+    vk::SubmitInfo submitInfo{.commandBufferCount = 1, .pCommandBuffers = &*commandBuffer};
+    mQueues.graphics.submit(submitInfo, nullptr);
+    mQueues.graphics.waitIdle();
   }
 };
 }  // namespace maple
