@@ -5,7 +5,6 @@
 struct VulkanTexture {
   VulkanImage image;                   // owns VkImage + allocation
   VkImageView view;                    // created from image
-  VkSampler sampler = VK_NULL_HANDLE;  // optional
   VkDevice device;
 
   VulkanTexture() = default;
@@ -45,10 +44,8 @@ struct VulkanTexture {
       device = other.device;
       image = std::move(other.image);
       view = other.view;
-      sampler = other.sampler;
 
       other.view = VK_NULL_HANDLE;
-      other.sampler = VK_NULL_HANDLE;
       other.device = VK_NULL_HANDLE;
     }
     return *this;
@@ -57,12 +54,6 @@ struct VulkanTexture {
  private:
   void destroy() {
     if (!device) return;
-
-    if (sampler) {
-      vkDestroySampler(device, sampler, nullptr);
-      sampler = VK_NULL_HANDLE;
-    }
-
     if (view) {
       vkDestroyImageView(device, view, nullptr);
       view = VK_NULL_HANDLE;
