@@ -41,13 +41,18 @@ struct VulkanMemoryManager {
   VulkanMemoryManager(const VulkanMemoryManager&) = delete;
   VulkanMemoryManager& operator=(const VulkanMemoryManager&) = delete;
 
-  VulkanMemoryManager(VulkanMemoryManager&& other) noexcept : allocator(other.allocator) { other.allocator = nullptr; }
+  VulkanMemoryManager(VulkanMemoryManager&& other) noexcept : allocator(other.allocator), device(other.device) {
+    other.allocator = nullptr;
+    other.device = nullptr;
+  }
 
   VulkanMemoryManager& operator=(VulkanMemoryManager&& other) noexcept {
     if (this != &other) {
       if (allocator) vmaDestroyAllocator(allocator);
       allocator = other.allocator;
       other.allocator = nullptr;
+      device = other.device;
+      other.device = nullptr;
     }
     return *this;
   }
