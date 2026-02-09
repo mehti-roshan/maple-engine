@@ -424,7 +424,7 @@ void Renderer::createLogicalDevice() {
   };
 }
 
-void Renderer::createMemoryManager() { mMemoryManager = VulkanMemoryManager(mInstance, mPhysicalDevice, mDevice); }
+void Renderer::createMemoryManager() { mMemoryManager = VulkanMemoryManager(mInstance, mPhysicalDevice, &mDevice); }
 
 void Renderer::createSwapChain() {
   auto surfaceCapabilities = mPhysicalDevice.getSurfaceCapabilitiesKHR(*mSurface);
@@ -616,7 +616,7 @@ void Renderer::createCommandPools() {
 
 void Renderer::createDepthResources() {
   vk::Format depthFormat = findDepthFormat();
-  mDepthImage = VulkanTexture(*mDevice,
+  mDepthImage = VulkanTexture(&mDevice,
                               mMemoryManager.get(),
                               {mSwapChainDetails.extent.width, mSwapChainDetails.extent.height, 1},
                               depthFormat,
@@ -639,7 +639,7 @@ void Renderer::createTexture() {
   stage.Upload(pixels, stage.size);
   stbi_image_free(pixels);
 
-  mTexture = VulkanTexture(*mDevice,
+  mTexture = VulkanTexture(&mDevice,
                            mMemoryManager.get(),
                            {static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight), 1},
                            vk::Format::eR8G8B8A8Srgb,

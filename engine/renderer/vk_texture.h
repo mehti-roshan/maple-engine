@@ -5,11 +5,11 @@
 struct VulkanTexture {
   VulkanImage image;                   // owns VkImage + allocation
   VkImageView view;                    // created from image
-  VkDevice device;
+  vk::raii::Device* device = nullptr;  // non owning
 
   VulkanTexture() = default;
 
-  VulkanTexture(VkDevice device,
+  VulkanTexture(vk::raii::Device* device,
                 VmaAllocator allocator,
                 vk::Extent3D extent,
                 vk::Format format,
@@ -28,7 +28,7 @@ struct VulkanTexture {
     viewInfo.subresourceRange.aspectMask = static_cast<VkImageAspectFlags>(aspect);
     viewInfo.subresourceRange.levelCount = 1;
     viewInfo.subresourceRange.layerCount = 1;
-    vkCreateImageView(device, &viewInfo, nullptr, &view);
+    vkCreateImageView(**device, &viewInfo, nullptr, &view);
   }
 
   ~VulkanTexture() { destroy(); }
@@ -46,7 +46,7 @@ struct VulkanTexture {
       view = other.view;
 
       other.view = VK_NULL_HANDLE;
-      other.device = VK_NULL_HANDLE;
+      other.device = nullptr;
     }
     return *this;
   }
@@ -55,7 +55,7 @@ struct VulkanTexture {
   void destroy() {
     if (!device) return;
     if (view) {
-      vkDestroyImageView(device, view, nullptr);
+      vkDestroyImageView(**device, view, nullptr);
       view = VK_NULL_HANDLE;
     }
     // VulkanImage destructor handles vmaDestroyImage
