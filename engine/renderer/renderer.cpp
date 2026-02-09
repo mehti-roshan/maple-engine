@@ -616,12 +616,10 @@ void Renderer::createCommandPools() {
 
 void Renderer::createDepthResources() {
   vk::Format depthFormat = findDepthFormat();
-  mDepthImage = VulkanTexture(&mDevice,
-                              mMemoryManager.get(),
-                              {mSwapChainDetails.extent.width, mSwapChainDetails.extent.height, 1},
-                              depthFormat,
-                              vk::ImageUsageFlagBits::eDepthStencilAttachment,
-                              vk::ImageAspectFlagBits::eDepth);
+  mDepthImage = mMemoryManager.createTexture({mSwapChainDetails.extent.width, mSwapChainDetails.extent.height, 1},
+                                             depthFormat,
+                                             vk::ImageUsageFlagBits::eDepthStencilAttachment,
+                                             vk::ImageAspectFlagBits::eDepth);
 }
 
 void Renderer::createTexture() {
@@ -639,12 +637,10 @@ void Renderer::createTexture() {
   stage.Upload(pixels, stage.size);
   stbi_image_free(pixels);
 
-  mTexture = VulkanTexture(&mDevice,
-                           mMemoryManager.get(),
-                           {static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight), 1},
-                           vk::Format::eR8G8B8A8Srgb,
-                           vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
-                           vk::ImageAspectFlagBits::eColor);
+  mTexture = mMemoryManager.createTexture({static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight), 1},
+                                          vk::Format::eR8G8B8A8Srgb,
+                                          vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
+                                          vk::ImageAspectFlagBits::eColor);
 
   auto cmd = beginSingleTimeCommands();
   mTexture.image.TransitionLayout(cmd, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);
