@@ -47,7 +47,6 @@ struct CommandPools {
 struct FrameData {
   vk::raii::CommandBuffer cmd = nullptr;
   vk::raii::Semaphore presentCompleteSem = nullptr;
-  vk::raii::Semaphore renderCompleteSem = nullptr;
   vk::raii::Fence drawFence = nullptr;
 };
 
@@ -93,6 +92,7 @@ class Renderer {
   // vk::raii::CommandBuffer mTransferCmd = nullptr;
   // vk::raii::Fence mPendingUploadFence = nullptr;
   std::vector<FrameData> mFrameData;
+  std::vector<vk::raii::Semaphore> mRenderCompleteSems;
 
   VulkanBuffer mVertexBuffer;
   VulkanBuffer mIndexBuffer;

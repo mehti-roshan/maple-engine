@@ -1,6 +1,7 @@
 #include <engine/file/file.h>
 #include <engine/logging/log_macros.h>
 #include <engine/renderer/renderer.h>
+#include <vulkan/vulkan_core.h>
 
 #include <algorithm>
 #include <cassert>
@@ -10,7 +11,9 @@
 #include <map>
 #include <ranges>
 #include <vector>
+#include <vulkan/vulkan_enums.hpp>
 #include <vulkan/vulkan_raii.hpp>
+#include <vulkan/vulkan_structs.hpp>
 
 #include "engine/renderer/vk_buffer.h"
 #include "engine/renderer/vk_sampler.h"
@@ -278,14 +281,14 @@ void Renderer::DrawFrame() {
     .commandBufferCount = 1,
     .pCommandBuffers = &*mFrameData[mFrameIdx].cmd,
     .signalSemaphoreCount = 1,
-    .pSignalSemaphores = &*mFrameData[mFrameIdx].renderCompleteSem,
+    .pSignalSemaphores = &*mRenderCompleteSems[imageIdx],
   };
 
   mQueues.graphics.submit(submitInfo, *mFrameData[mFrameIdx].drawFence);
 
   const vk::PresentInfoKHR presentInfoKHR{
     .waitSemaphoreCount = 1,
-    .pWaitSemaphores = &*mFrameData[mFrameIdx].renderCompleteSem,
+    .pWaitSemaphores = &*mRenderCompleteSems[imageIdx],
     .swapchainCount = 1,
     .pSwapchains = &*mSwapChain,
     .pImageIndices = &imageIdx,
@@ -852,13 +855,13 @@ void Renderer::createFrameData() {
 
   for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
     mFrameData[i].cmd = std::move(cmdBuffers[i]);
-
     mFrameData[i].presentCompleteSem = vk::raii::Semaphore(mDevice, vk::SemaphoreCreateInfo{});
-
-    mFrameData[i].renderCompleteSem = vk::raii::Semaphore(mDevice, vk::SemaphoreCreateInfo{});
-
     mFrameData[i].drawFence = vk::raii::Fence(mDevice, {.flags = vk::FenceCreateFlagBits::eSignaled});
   }
+
+  mRenderCompleteSems.clear();
+  mRenderCompleteSems.reserve(mSwapChainImages.size());
+  for (size_t i = 0; i < mSwapChainImageViews.size(); i++) mRenderCompleteSems.emplace_back(mDevice, vk::SemaphoreCreateInfo{});
 }
 
 void Renderer::cleanupSwapChain() {
