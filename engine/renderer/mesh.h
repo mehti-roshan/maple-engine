@@ -1,7 +1,12 @@
 #pragma once
 #include <type_traits>
 #include <vector>
+#define VULKAN_HPP_NO_STRUCT_CONSTRUCTORS
+#if defined(__INTELLISENSE__) || !defined(USE_CPP20_MODULES)
 #include <vulkan/vulkan_raii.hpp>
+#else
+import vulkan_hpp;
+#endif
 
 template <typename T>
 concept VertexType = requires {
@@ -18,10 +23,8 @@ struct Mesh {
   std::vector<VertexT> vertices;
   std::vector<IndexT> indices;
 
-  static constexpr vk::IndexType vkIndexType = std::is_same_v<IndexT, uint16_t> ? vk::IndexType::eUint16 : vk::IndexType::eUint32;
-
+  static vk::IndexType GetVkIndexType() { return std::is_same_v<IndexT, uint16_t> ? vk::IndexType::eUint16 : vk::IndexType::eUint32; }
   static vk::VertexInputBindingDescription GetBindingDescription() { return VertexT::getBindingDescription(); }
-
   static std::vector<vk::VertexInputAttributeDescription> GetAttributeDescriptions() { return VertexT::getAttributeDescriptions(); }
 
   size_t GetVerticesSizeBytes() const {return sizeof(vertices[0]) * vertices.size(); }

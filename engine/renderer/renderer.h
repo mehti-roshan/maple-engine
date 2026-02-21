@@ -1,9 +1,10 @@
 #pragma once
 
 #include <functional>
-#include <glm/fwd.hpp>
+#include <glm/glm.hpp>
 #include <vector>
 
+#include "engine/renderer/mesh.h"
 #include "engine/renderer/vk_buffer.h"
 #include "engine/renderer/vk_memory_manager.h"
 #include "engine/renderer/vk_sampler.h"
@@ -50,6 +51,19 @@ struct FrameData {
   vk::raii::Fence drawFence = nullptr;
 };
 
+struct Vertex {
+  glm::vec3 pos;
+  glm::vec3 color;
+  glm::vec2 texCoord;
+
+  static vk::VertexInputBindingDescription getBindingDescription() { return {0, sizeof(Vertex), vk::VertexInputRate::eVertex}; }
+  static std::vector<vk::VertexInputAttributeDescription> getAttributeDescriptions() {
+    return {vk::VertexInputAttributeDescription(0, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, pos)),
+            vk::VertexInputAttributeDescription(1, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, color)),
+            vk::VertexInputAttributeDescription(2, 0, vk::Format::eR32G32Sfloat, offsetof(Vertex, texCoord))};
+  }
+};
+
 namespace maple {
 class Renderer {
  public:
@@ -94,8 +108,8 @@ class Renderer {
   std::vector<FrameData> mFrameData;
   std::vector<vk::raii::Semaphore> mRenderCompleteSems;
 
-  VulkanBuffer mVertexBuffer;
-  VulkanBuffer mIndexBuffer;
+  Mesh<Vertex, uint32_t> mMesh;
+  VulkanBuffer mMeshBuffer;
 
   std::vector<VulkanBuffer> mUniformBuffers;
 
@@ -125,8 +139,7 @@ class Renderer {
 
   void createTexture();
   void createTextureSampler();
-  void createVertexBuffer();
-  void createIndexBuffer();
+  void createMeshBuffer();
 
   void recreateSwapChain();
   void cleanupSwapChain();

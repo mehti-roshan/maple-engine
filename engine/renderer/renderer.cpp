@@ -28,6 +28,9 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include <engine/third_party/stb_image.h>
 
+#define TINYOBJLOADER_IMPLEMENTATION
+#include <engine/third_party/tiny_obj_loader.h>
+
 #include "mesh.h"
 
 const std::vector<char const*> validationLayers = {"VK_LAYER_KHRONOS_validation"};
@@ -99,32 +102,6 @@ QueueFamilyIndices getDeviceQueueFamilyIndices(vk::raii::PhysicalDevice device, 
 
   return indices;
 }
-
-struct Vertex {
-  glm::vec3 pos;
-  glm::vec3 color;
-  glm::vec2 texCoord;
-
-  static vk::VertexInputBindingDescription getBindingDescription() { return {0, sizeof(Vertex), vk::VertexInputRate::eVertex}; }
-  static std::vector<vk::VertexInputAttributeDescription> getAttributeDescriptions() {
-    return {vk::VertexInputAttributeDescription(0, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, pos)),
-            vk::VertexInputAttributeDescription(1, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, color)),
-            vk::VertexInputAttributeDescription(2, 0, vk::Format::eR32G32Sfloat, offsetof(Vertex, texCoord))};
-  }
-};
-
-Mesh<Vertex, uint16_t> mesh = {
-  .vertices = {{{-0.5f, -0.5f, 0.0f}, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f}},
-               {{0.5f, -0.5f, 0.0f}, {0.0f, 1.0f, 0.0f}, {1.0f, 0.0f}},
-               {{0.5f, 0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {1.0f, 1.0f}},
-               {{-0.5f, 0.5f, 0.0f}, {1.0f, 1.0f, 1.0f}, {0.0f, 1.0f}},
-
-               {{-0.5f, -0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f}},
-               {{0.5f, -0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}, {1.0f, 0.0f}},
-               {{0.5f, 0.5f, -0.5f}, {0.0f, 0.0f, 1.0f}, {1.0f, 1.0f}},
-               {{-0.5f, 0.5f, -0.5f}, {1.0f, 1.0f, 1.0f}, {0.0f, 1.0f}}},
-  .indices = {0, 1, 2, 2, 3, 0, 4, 5, 6, 6, 7, 4},
-};
 
 bool isPhysicalDeviceSuitable(vk::raii::PhysicalDevice device, vk::SurfaceKHR surface) {
   if (device.getProperties().apiVersion < VK_API_VERSION_1_3) return false;
@@ -256,8 +233,7 @@ void Renderer::Init(const std::vector<const char*>& glfwExtensions, SurfaceCreat
   createFrameData();
   createTexture();
   createTextureSampler();
-  createVertexBuffer();
-  createIndexBuffer();
+  createMeshBuffer();
   createUniformBuffers();
   createDescriptorPool();
   createDescriptorSets();
@@ -314,7 +290,7 @@ void Renderer::updateUniformBuffer(uint32_t currentImage) {
 
   UniformBufferObject ubo{
     .model = glm::rotate(glm::mat4(1.0f), time * glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f)),
-    .view = glm::lookAt(glm::vec3(2.0f), glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f)),
+    .view = glm::lookAt(glm::vec3(2.0f), glm::vec3(0.0f), glm::vec3(0.0f, 0.0f, 1.0f)),
     .proj = glm::perspective(
       glm::radians(45.0f), static_cast<float>(mSwapChainDetails.extent.width) / static_cast<float>(mSwapChainDetails.extent.height), 0.1f, 2000.0f)};
   ubo.proj[1][1] *= -1;  // Invert Y for Vulkan
@@ -528,8 +504,8 @@ void Renderer::createGraphicsPipeline() {
     .pDynamicStates = dynamicStates.data(),
   };
 
-  auto bindingDescription = mesh.GetBindingDescription();
-  auto attributeDescriptions = mesh.GetAttributeDescriptions();
+  auto bindingDescription = mMesh.GetBindingDescription();
+  auto attributeDescriptions = mMesh.GetAttributeDescriptions();
   vk::PipelineVertexInputStateCreateInfo vertexInputInfo{
     .vertexBindingDescriptionCount = 1,
     .pVertexBindingDescriptions = &bindingDescription,
@@ -674,33 +650,81 @@ void Renderer::createTextureSampler() {
   mSampler = VulkanSampler(*mDevice, samplerInfo);
 }
 
-void Renderer::createVertexBuffer() {
-  auto stage = mMemoryManager.createBuffer(sizeof(mesh.vertices[0]) * mesh.vertices.size(),
+void Renderer::createMeshBuffer() {
+  tinyobj::attrib_t attrib;
+  std::vector<tinyobj::shape_t> shapes;
+  std::vector<tinyobj::material_t> materials;
+  std::string warn, err;
+
+  if (!tinyobj::LoadObj(&attrib, &shapes, &materials, &warn, &err, "assets/models/viking_room.obj"))
+    MAPLE_FATAL("Failed to load obj file: {} {}", warn, err);
+
+  for (const auto& shape : shapes) {
+    for (const auto& idx : shape.mesh.indices) {
+      Vertex v{
+        .pos =
+          {
+            attrib.vertices[3 * idx.vertex_index + 0],
+            attrib.vertices[3 * idx.vertex_index + 1],
+            attrib.vertices[3 * idx.vertex_index + 2],
+          },
+        .color = {1.0f, 1.0f, 1.0f},
+        .texCoord = {
+          attrib.texcoords[2 * idx.texcoord_index + 0],
+          1.0f - attrib.texcoords[2 * idx.texcoord_index + 1],
+        },
+      };
+
+      mMesh.vertices.push_back(v);
+      mMesh.indices.push_back(mMesh.indices.size());
+    }
+  }
+
+  auto stage = mMemoryManager.createBuffer(mMesh.GetTotalSizeBytes(),
                                            vk::BufferUsageFlagBits::eTransferSrc,
                                            VMA_MEMORY_USAGE_AUTO,
                                            VMA_ALLOCATION_CREATE_MAPPED_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+  stage.Upload(mMesh.vertices.data(), mMesh.GetVerticesSizeBytes());
+  stage.Upload(mMesh.indices.data(), mMesh.GetIndicesSizeBytes(), mMesh.GetVerticesSizeBytes());
 
-  stage.Upload(mesh.vertices.data(), stage.size);
+  mMeshBuffer = mMemoryManager.createBuffer(
+    stage.size,
+    vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eIndexBuffer,
+    VMA_MEMORY_USAGE_AUTO,
+    0);
 
-  mVertexBuffer =
-    mMemoryManager.createBuffer(stage.size, vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eVertexBuffer, VMA_MEMORY_USAGE_AUTO, 0);
-
-  copyBuffer(stage.buffer, mVertexBuffer.buffer, stage.size);
+  copyBuffer(stage.buffer, mMeshBuffer.buffer, stage.size);
 }
 
-void Renderer::createIndexBuffer() {
-  auto stage = mMemoryManager.createBuffer(sizeof(mesh.indices[0]) * mesh.indices.size(),
-                                           vk::BufferUsageFlagBits::eTransferSrc,
-                                           VMA_MEMORY_USAGE_AUTO,
-                                           VMA_ALLOCATION_CREATE_MAPPED_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+// void Renderer::createVertexBuffer() {
+//   auto stage = mMemoryManager.createBuffer(sizeof(mesh.vertices[0]) * mesh.vertices.size(),
+//                                            vk::BufferUsageFlagBits::eTransferSrc,
+//                                            VMA_MEMORY_USAGE_AUTO,
+//                                            VMA_ALLOCATION_CREATE_MAPPED_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
 
-  stage.Upload(mesh.indices.data(), stage.size);
+//   stage.Upload(mesh.vertices.data(), stage.size);
 
-  mIndexBuffer =
-    mMemoryManager.createBuffer(stage.size, vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eIndexBuffer, VMA_MEMORY_USAGE_AUTO, 0);
+//   mVertexBuffer =
+//     mMemoryManager.createBuffer(stage.size, vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eVertexBuffer, VMA_MEMORY_USAGE_AUTO,
+//     0);
 
-  copyBuffer(stage.buffer, mIndexBuffer.buffer, stage.size);
-}
+//   copyBuffer(stage.buffer, mVertexBuffer.buffer, stage.size);
+// }
+
+// void Renderer::createIndexBuffer() {
+//   auto stage = mMemoryManager.createBuffer(sizeof(mesh.indices[0]) * mesh.indices.size(),
+//                                            vk::BufferUsageFlagBits::eTransferSrc,
+//                                            VMA_MEMORY_USAGE_AUTO,
+//                                            VMA_ALLOCATION_CREATE_MAPPED_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+
+//   stage.Upload(mesh.indices.data(), stage.size);
+
+//   mIndexBuffer =
+//     mMemoryManager.createBuffer(stage.size, vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eIndexBuffer, VMA_MEMORY_USAGE_AUTO,
+//     0);
+
+//   copyBuffer(stage.buffer, mIndexBuffer.buffer, stage.size);
+// }
 
 void Renderer::createUniformBuffers() {
   mUniformBuffers.clear();
@@ -822,10 +846,10 @@ void Renderer::recordCommandBuffer(uint32_t imageIdx) {
     0, vk::Viewport{0.0f, 0.0f, static_cast<float>(mSwapChainDetails.extent.width), static_cast<float>(mSwapChainDetails.extent.height), 0.0f, 1.0f});
   mFrameData[mFrameIdx].cmd.setScissor(0, vk::Rect2D(vk::Offset2D(0, 0), mSwapChainDetails.extent));
 
-  mFrameData[mFrameIdx].cmd.bindVertexBuffers(0, {mVertexBuffer.buffer}, {0});
-  mFrameData[mFrameIdx].cmd.bindIndexBuffer(mIndexBuffer.buffer, 0, vk::IndexType::eUint16);
+  mFrameData[mFrameIdx].cmd.bindVertexBuffers(0, {mMeshBuffer.buffer}, {0});
+  mFrameData[mFrameIdx].cmd.bindIndexBuffer(mMeshBuffer.buffer, mMesh.GetVerticesSizeBytes(), mMesh.GetVkIndexType());
   mFrameData[mFrameIdx].cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, mPipelineLayout, 0, *mDescriptorSets[mFrameIdx], nullptr);
-  mFrameData[mFrameIdx].cmd.drawIndexed(mesh.indices.size(), 1, 0, 0, 0);
+  mFrameData[mFrameIdx].cmd.drawIndexed(mMesh.indices.size(), 1, 0, 0, 0);
 
   mFrameData[mFrameIdx].cmd.endRendering();
 
