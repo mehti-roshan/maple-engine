@@ -10,6 +10,7 @@
 #include <cstring>
 #include <map>
 #include <ranges>
+#include <unordered_map>
 #include <vector>
 #include <vulkan/vulkan_enums.hpp>
 #include <vulkan/vulkan_raii.hpp>
@@ -659,6 +660,8 @@ void Renderer::createMeshBuffer() {
   if (!tinyobj::LoadObj(&attrib, &shapes, &materials, &warn, &err, "assets/models/viking_room.obj"))
     MAPLE_FATAL("Failed to load obj file: {} {}", warn, err);
 
+  std::unordered_map<Vertex, uint32_t> uniqueVerts{};
+
   for (const auto& shape : shapes) {
     for (const auto& idx : shape.mesh.indices) {
       Vertex v{
@@ -669,16 +672,23 @@ void Renderer::createMeshBuffer() {
             attrib.vertices[3 * idx.vertex_index + 2],
           },
         .color = {1.0f, 1.0f, 1.0f},
-        .texCoord = {
-          attrib.texcoords[2 * idx.texcoord_index + 0],
-          1.0f - attrib.texcoords[2 * idx.texcoord_index + 1],
-        },
+        .texCoord =
+          {
+            attrib.texcoords[2 * idx.texcoord_index + 0],
+            1.0f - attrib.texcoords[2 * idx.texcoord_index + 1],
+          },
       };
 
-      mMesh.vertices.push_back(v);
-      mMesh.indices.push_back(mMesh.indices.size());
+      if (uniqueVerts.count(v) == 0) {
+        uniqueVerts[v] = static_cast<uint32_t>(mMesh.vertices.size());
+        mMesh.vertices.push_back(v);
+      }
+      mMesh.indices.push_back(uniqueVerts[v]);
     }
   }
+
+  MAPLE_DEBUG("unique verts: {}", uniqueVerts.size());
+  MAPLE_DEBUG("verts: {}", mMesh.vertices.size());
 
   auto stage = mMemoryManager.createBuffer(mMesh.GetTotalSizeBytes(),
                                            vk::BufferUsageFlagBits::eTransferSrc,
