@@ -2,12 +2,7 @@
 
 #include "engine/renderer/vk_buffer.h"
 #include "log_macros.h"
-#define VULKAN_HPP_NO_STRUCT_CONSTRUCTORS
-#if defined(__INTELLISENSE__) || !defined(USE_CPP20_MODULES)
-#include <vulkan/vulkan_raii.hpp>
-#else
-import vulkan_hpp;
-#endif
+#include "vk_header.h" // IWYU pragma: export
 
 #include <engine/third_party/vma/vk_mem_alloc.h>
 

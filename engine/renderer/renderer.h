@@ -3,6 +3,8 @@
 #include <functional>
 #include <glm/glm.hpp>
 #define GLM_ENABLE_EXPERIMENTAL
+#include <engine/third_party/vma/vk_mem_alloc.h>
+
 #include <glm/gtx/hash.hpp>
 #include <vector>
 
@@ -12,15 +14,7 @@
 #include "engine/renderer/vk_sampler.h"
 #include "engine/renderer/vk_texture.h"
 #include "log_macros.h"
-
-#define VULKAN_HPP_NO_STRUCT_CONSTRUCTORS
-#if defined(__INTELLISENSE__) || !defined(USE_CPP20_MODULES)
-#include <vulkan/vulkan_raii.hpp>
-#else
-import vulkan_hpp;
-#endif
-
-#include <engine/third_party/vma/vk_mem_alloc.h>
+#include "vk_header.h" // IWYU pragma: export
 
 typedef struct VkInstance_T* VkInstance;
 typedef struct VkSurfaceKHR_T* VkSurfaceKHR;

@@ -1,14 +1,9 @@
 #pragma once
 
-#include "log_macros.h"
-#define VULKAN_HPP_NO_STRUCT_CONSTRUCTORS
-#if defined(__INTELLISENSE__) || !defined(USE_CPP20_MODULES)
-#include <vulkan/vulkan_raii.hpp>
-#else
-import vulkan_hpp;
-#endif
-
 #include <engine/third_party/vma/vk_mem_alloc.h>
+
+#include "log_macros.h"
+#include "vk_header.h" // IWYU pragma: export
 
 // Simple RAII wrapper for VMA-managed Vulkan buffers
 struct VulkanBuffer {
@@ -20,7 +15,8 @@ struct VulkanBuffer {
   VulkanBuffer() {};
 
   // Construction
-  VulkanBuffer(VmaAllocator allocator, VkDeviceSize size, vk::BufferUsageFlags usage, VmaMemoryUsage memoryUsage, VmaAllocationCreateFlags flags) : allocator(allocator), size(size) {
+  VulkanBuffer(VmaAllocator allocator, VkDeviceSize size, vk::BufferUsageFlags usage, VmaMemoryUsage memoryUsage, VmaAllocationCreateFlags flags)
+      : allocator(allocator), size(size) {
     MAPLE_ASSERT(allocator, "VMA allocator must be valid");
 
     vk::BufferCreateInfo bufferInfo{

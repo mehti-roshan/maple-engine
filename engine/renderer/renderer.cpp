@@ -1,7 +1,6 @@
 #include <engine/file/file.h>
 #include <engine/logging/log_macros.h>
 #include <engine/renderer/renderer.h>
-#include <vulkan/vulkan_core.h>
 
 #include <algorithm>
 #include <cassert>
@@ -12,9 +11,6 @@
 #include <ranges>
 #include <unordered_map>
 #include <vector>
-#include <vulkan/vulkan_enums.hpp>
-#include <vulkan/vulkan_raii.hpp>
-#include <vulkan/vulkan_structs.hpp>
 
 #include "engine/renderer/vk_buffer.h"
 #include "engine/renderer/vk_sampler.h"
@@ -686,9 +682,6 @@ void Renderer::createMeshBuffer() {
       mMesh.indices.push_back(uniqueVerts[v]);
     }
   }
-
-  MAPLE_DEBUG("unique verts: {}", uniqueVerts.size());
-  MAPLE_DEBUG("verts: {}", mMesh.vertices.size());
 
   auto stage = mMemoryManager.createBuffer(mMesh.GetTotalSizeBytes(),
                                            vk::BufferUsageFlagBits::eTransferSrc,

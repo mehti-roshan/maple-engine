@@ -1,12 +1,8 @@
 #pragma once
 #include <type_traits>
 #include <vector>
-#define VULKAN_HPP_NO_STRUCT_CONSTRUCTORS
-#if defined(__INTELLISENSE__) || !defined(USE_CPP20_MODULES)
-#include <vulkan/vulkan_raii.hpp>
-#else
-import vulkan_hpp;
-#endif
+
+#include "vk_header.h" // IWYU pragma: export
 
 template <typename T>
 concept VertexType = requires {
@@ -27,7 +23,7 @@ struct Mesh {
   static vk::VertexInputBindingDescription GetBindingDescription() { return VertexT::getBindingDescription(); }
   static std::vector<vk::VertexInputAttributeDescription> GetAttributeDescriptions() { return VertexT::getAttributeDescriptions(); }
 
-  size_t GetVerticesSizeBytes() const {return sizeof(vertices[0]) * vertices.size(); }
+  size_t GetVerticesSizeBytes() const { return sizeof(vertices[0]) * vertices.size(); }
   size_t GetIndicesSizeBytes() const { return sizeof(indices[0]) * indices.size(); }
   size_t GetTotalSizeBytes() const { return GetVerticesSizeBytes() + GetIndicesSizeBytes(); }
 };
