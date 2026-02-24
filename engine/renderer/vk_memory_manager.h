@@ -61,16 +61,19 @@ struct VulkanMemoryManager {
   VmaAllocator get() const { return allocator; }
 
   // Create a VulkanBuffer
+  [[nodiscard]]
   VulkanBuffer createBuffer(VkDeviceSize size, vk::BufferUsageFlags usage, VmaMemoryUsage memoryUsage, VmaAllocationCreateFlags flags) {
     return VulkanBuffer(allocator, size, usage, memoryUsage, flags);
   }
 
   // helper for creating VulkanImage
+  [[nodiscard]]
   VulkanImage createImage(vk::Extent3D extent, vk::Format format, vk::ImageUsageFlags usage, VmaMemoryUsage memoryUsage) {
     return VulkanImage(allocator, extent, format, usage, memoryUsage);
   }
 
-  // // helper for creating VulkanTexture
+  // helper for creating VulkanTexture
+  [[nodiscard]]
   VulkanTexture createTexture(vk::Extent3D extent, vk::Format format, vk::ImageUsageFlags usage, vk::ImageAspectFlags aspect) {
     return VulkanTexture(device, allocator, extent, format, usage, aspect);
   }
