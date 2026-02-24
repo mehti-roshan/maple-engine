@@ -8,13 +8,15 @@
 #include <glm/gtx/hash.hpp>
 #include <vector>
 
+#define VULKAN_HPP_NO_STRUCT_CONSTRUCTORS
+#include <vulkan/vulkan_raii.hpp>
+
 #include "engine/renderer/mesh.h"
 #include "engine/renderer/vk_buffer.h"
 #include "engine/renderer/vk_memory_manager.h"
 #include "engine/renderer/vk_sampler.h"
 #include "engine/renderer/vk_texture.h"
 #include "log_macros.h"
-#include "vk_header.h" // IWYU pragma: export
 
 typedef struct VkInstance_T* VkInstance;
 typedef struct VkSurfaceKHR_T* VkSurfaceKHR;

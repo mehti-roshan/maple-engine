@@ -3,7 +3,9 @@
 #include <engine/third_party/vma/vk_mem_alloc.h>
 
 #include "log_macros.h"
-#include "vk_header.h" // IWYU pragma: export
+
+#define VULKAN_HPP_NO_STRUCT_CONSTRUCTORS
+#include <vulkan/vulkan_raii.hpp>
 
 struct VulkanSampler {
   VkSampler sampler = VK_NULL_HANDLE;

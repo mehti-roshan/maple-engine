@@ -28,7 +28,7 @@
 #define TINYOBJLOADER_IMPLEMENTATION
 #include <engine/third_party/tiny_obj_loader.h>
 
-#include "mesh.h"
+#include "vk_context.h"
 
 const std::vector<char const*> validationLayers = {"VK_LAYER_KHRONOS_validation"};
 

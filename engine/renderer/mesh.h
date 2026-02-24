@@ -2,7 +2,8 @@
 #include <type_traits>
 #include <vector>
 
-#include "vk_header.h" // IWYU pragma: export
+#define VULKAN_HPP_NO_STRUCT_CONSTRUCTORS
+#include <vulkan/vulkan_raii.hpp>
 
 template <typename T>
 concept VertexType = requires {

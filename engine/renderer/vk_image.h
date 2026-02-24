@@ -1,10 +1,12 @@
 #pragma once
 
+#include <engine/third_party/vma/vk_mem_alloc.h>
+
 #include "engine/renderer/vk_buffer.h"
 #include "log_macros.h"
-#include "vk_header.h" // IWYU pragma: export
 
-#include <engine/third_party/vma/vk_mem_alloc.h>
+#define VULKAN_HPP_NO_STRUCT_CONSTRUCTORS
+#include <vulkan/vulkan_raii.hpp>
 
 // RAII wrapper for a VMA-managed Vulkan image
 struct VulkanImage {
