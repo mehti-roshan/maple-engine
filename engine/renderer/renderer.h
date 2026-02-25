@@ -2,6 +2,8 @@
 
 #include <functional>
 #include <glm/glm.hpp>
+#include "engine/renderer/vk_logical_device.h"
+#include "engine/renderer/vk_physical_device.h"
 #define GLM_ENABLE_EXPERIMENTAL
 #include <engine/third_party/vma/vk_mem_alloc.h>
 
@@ -18,6 +20,8 @@
 #include "engine/renderer/vk_texture.h"
 #include "log_macros.h"
 
+#include "vk_instance_ctx.h"
+
 typedef struct VkInstance_T* VkInstance;
 typedef struct VkSurfaceKHR_T* VkSurfaceKHR;
 
@@ -29,13 +33,6 @@ using FrameBufferSizeCallback = std::function<void(uint32_t&, uint32_t&)>;
 struct SwapChainDetails {
   vk::SurfaceFormatKHR format;
   vk::Extent2D extent;
-};
-
-struct Queues {
-  vk::raii::Queue graphics = nullptr;
-  vk::raii::Queue present = nullptr;
-  vk::raii::Queue tranfer = nullptr;
-  vk::raii::Queue compute = nullptr;
 };
 
 struct CommandPools {
@@ -76,7 +73,7 @@ struct hash<Vertex> {
 namespace maple {
 class Renderer {
  public:
-  ~Renderer() { mDevice.waitIdle(); }
+  ~Renderer() { mDevice.device.waitIdle(); }
 
   void Init(const std::vector<const char*>& glfwExtensions, SurfaceCreateCallback, FrameBufferSizeCallback);
   void DrawFrame();
@@ -90,14 +87,11 @@ class Renderer {
   uint32_t mFrameIdx = 0;
   FrameBufferSizeCallback mFrameBufferSizeCallback;
 
-  vk::raii::Context mContext;
-  vk::raii::Instance mInstance = nullptr;
-  vk::raii::DebugUtilsMessengerEXT mDebugMessenger = nullptr;
+  VulkanInstanceContext mInstanceCtx;
   vk::raii::SurfaceKHR mSurface = nullptr;
-  vk::raii::PhysicalDevice mPhysicalDevice = nullptr;
-  vk::raii::Device mDevice = nullptr;
+  VulkanPhysicalDevice mPhysicalDevice;
+  VulkanLogicalDevice mDevice;
   VulkanMemoryManager mMemoryManager;
-  Queues mQueues;
   vk::raii::SwapchainKHR mSwapChain = nullptr;
   SwapChainDetails mSwapChainDetails;
   std::vector<vk::Image> mSwapChainImages;
@@ -127,11 +121,6 @@ class Renderer {
   VulkanTexture mTexture;
   VulkanSampler mSampler;
 
-  void createInstance(const std::vector<const char*>& glfwExtensions);
-  void setupDebugMessenger();
-  void pickPhysicalDevice();
-  void createLogicalDevice();
-  void createMemoryManager();
   void createSwapChain();
   void createImageViews();
   void createDescriptorSetLayout();
@@ -158,7 +147,7 @@ class Renderer {
 
   vk::Format findSupportedFormat(const std::vector<vk::Format>& candidates, vk::ImageTiling tiling, vk::FormatFeatureFlags features) {
     for (vk::Format format : candidates) {
-      vk::FormatProperties props = mPhysicalDevice.getFormatProperties(format);
+      vk::FormatProperties props = mPhysicalDevice.device.getFormatProperties(format);
 
       if (tiling == vk::ImageTiling::eLinear && (props.linearTilingFeatures & features) == features) {
         return format;
@@ -187,7 +176,7 @@ class Renderer {
   vk::raii::CommandBuffer beginSingleTimeCommands() {
     vk::CommandBufferAllocateInfo allocInfo{
       .commandPool = mCommandPools.graphics, .level = vk::CommandBufferLevel::ePrimary, .commandBufferCount = 1};
-    vk::raii::CommandBuffer commandBuffer = std::move(mDevice.allocateCommandBuffers(allocInfo).front());
+    vk::raii::CommandBuffer commandBuffer = std::move(mDevice.device.allocateCommandBuffers(allocInfo).front());
     vk::CommandBufferBeginInfo beginInfo{.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit};
     commandBuffer.begin(beginInfo);
     return commandBuffer;
@@ -196,8 +185,8 @@ class Renderer {
   void endSingleTimeCommands(vk::raii::CommandBuffer& commandBuffer) {
     commandBuffer.end();
     vk::SubmitInfo submitInfo{.commandBufferCount = 1, .pCommandBuffers = &*commandBuffer};
-    mQueues.graphics.submit(submitInfo, nullptr);
-    mQueues.graphics.waitIdle();
+    mDevice.queues.graphics.submit(submitInfo, nullptr);
+    mDevice.queues.graphics.waitIdle();
   }
 };
 }  // namespace maple

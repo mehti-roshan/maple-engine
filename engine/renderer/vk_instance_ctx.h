@@ -14,10 +14,7 @@ struct VulkanInstanceContext {
   vk::raii::Instance mInstance;
   vk::raii::DebugUtilsMessengerEXT mDebugMessenger;
 
-  // Delete copy constructors
-  VulkanInstanceContext(const VulkanInstanceContext&) = delete;
-  VulkanInstanceContext& operator=(const VulkanInstanceContext&) = delete;
-
+  VulkanInstanceContext() : mInstance(nullptr), mDebugMessenger(nullptr) {}
   VulkanInstanceContext(std::vector<const char*> requiredExtensions, bool debug) : mInstance(nullptr), mDebugMessenger(nullptr) {
     std::vector<const char*> requiredLayers;
 
