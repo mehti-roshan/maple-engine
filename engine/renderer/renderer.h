@@ -2,6 +2,7 @@
 
 #include <functional>
 #include <glm/glm.hpp>
+
 #include "engine/renderer/vk_graphics_pipeline.h"
 #include "engine/renderer/vk_logical_device.h"
 #include "engine/renderer/vk_physical_device.h"
@@ -20,19 +21,7 @@
 #include "engine/renderer/vk_memory_manager.h"
 #include "engine/renderer/vk_sampler.h"
 #include "engine/renderer/vk_texture.h"
-
 #include "vk_instance_ctx.h"
-
-struct CommandPools {
-  vk::raii::CommandPool graphics = nullptr;
-  vk::raii::CommandPool transfer = nullptr;
-};
-
-struct FrameData {
-  vk::raii::CommandBuffer cmd = nullptr;
-  vk::raii::Semaphore presentCompleteSem = nullptr;
-  vk::raii::Fence drawFence = nullptr;
-};
 
 struct Vertex {
   glm::vec3 pos;
@@ -87,11 +76,20 @@ class Renderer {
   vk::raii::DescriptorPool mDescriptorPool = nullptr;
   std::vector<vk::raii::DescriptorSet> mDescriptorSets;
 
+  struct CommandPools {
+    vk::raii::CommandPool graphics = nullptr;
+    vk::raii::CommandPool transfer = nullptr;
+  };
   CommandPools mCommandPools;
   // TODO: implement
   // std::vector<VulkanBuffer> mPendingUploads;
   // vk::raii::CommandBuffer mTransferCmd = nullptr;
   // vk::raii::Fence mPendingUploadFence = nullptr;
+  struct FrameData {
+    vk::raii::CommandBuffer cmd = nullptr;
+    vk::raii::Semaphore presentCompleteSem = nullptr;
+    vk::raii::Fence drawFence = nullptr;
+  };
   std::vector<FrameData> mFrameData;
   std::vector<vk::raii::Semaphore> mRenderCompleteSems;
 
