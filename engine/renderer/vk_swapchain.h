@@ -10,6 +10,35 @@
 #include <vulkan/vulkan_raii.hpp>
 
 namespace maple {
+/// \class VulkanSwapChain
+/// \brief Manages Vulkan swapchain creation, recreation, and image management.
+///
+/// This class encapsulates the Vulkan swapchain functionality, handling the creation
+/// and recreation of swapchain images, image views, and depth textures. It implements
+/// strategies for selecting optimal surface formats, present modes, and extents based
+/// on physical device capabilities.
+///
+/// \section Format Selection Strategy
+/// The class employs the following strategies for format selection:
+///
+/// - **Surface Format Selection**: Prioritizes sRGB format (eB8G8R8A8Srgb) with
+///   sRGB nonlinear color space for better color accuracy. Falls back to the first
+///   available format from the device if the preferred format is not available.
+///
+/// - **Present Mode Selection**: Attempts to use mailbox presentation mode for
+///   lowest latency with minimal tearing. Falls back to FIFO (guaranteed to be
+///   available) if mailbox is not supported.
+///
+/// - **Depth Format Selection**: Automatically selects the first supported depth
+///   format from the ordered preference list (32-bit float, 32-bit float + 8-bit
+///   stencil, 24-bit + 8-bit stencil), using optimal tiling for performance.
+///
+/// \section Image Configuration
+/// - Minimum image count is automatically determined as max(3, minImageCount),
+///   clamped to maxImageCount if necessary.
+/// - Images are configured with exclusive sharing mode if graphics and present
+///   queues are the same, otherwise concurrent mode is used.
+/// - Both color and depth images are created with appropriate usage flags.
 struct VulkanSwapChain {
  public:
   struct ImageAndImageView {
