@@ -11,6 +11,7 @@
 
 #include "engine/renderer/vk_buffer.h"
 #include "engine/renderer/vk_device_features.h"
+#include "engine/renderer/vk_graphics_pipeline.h"
 #include "engine/renderer/vk_instance_ctx.h"
 #include "engine/renderer/vk_logical_device.h"
 #include "engine/renderer/vk_sampler.h"
@@ -36,15 +37,6 @@ constexpr bool debug = false;
 #else
 constexpr bool debug = true;
 #endif
-
-[[nodiscard]] vk::raii::ShaderModule createShaderModule(vk::raii::Device& device, const std::vector<char>& code) {
-  vk::ShaderModuleCreateInfo createInfo{
-    .codeSize = code.size(),
-    .pCode = reinterpret_cast<const uint32_t*>(code.data()),
-  };
-
-  return vk::raii::ShaderModule(device, createInfo);
-}
 
 void transition_image_layout(vk::Image image,
                              vk::CommandBuffer commandBuffer,
@@ -107,7 +99,17 @@ void Renderer::Init(const std::vector<const char*>& glfwExtensions, SurfaceCreat
                                 .memoryManager = mMemoryManager,
                                 .framebufferSizeCb = mFrameBufferSizeCallback});
   createDescriptorSetLayout();
-  createGraphicsPipeline();
+  mGraphicsPipeline = VulkanGraphicsPipeline(VulkanGraphicsPipeline::CreateInfo{
+    .shaderFile = "assets/shaders/slang.spv",
+    .device = mDevice,
+    .swapchain = mSwapChain,
+    .descriptorSetLayout = mDescriptorSetLayout,
+    .vertexLayoutDescription =
+      {
+        mMesh.GetBindingDescription(),
+        mMesh.GetAttributeDescriptions(),
+      },
+  });
   createCommandPools();
   createFrameData();
   createTexture();
@@ -199,94 +201,6 @@ void Renderer::createDescriptorSetLayout() {
 
   vk::DescriptorSetLayoutCreateInfo layoutInfo{.bindingCount = bindings.size(), .pBindings = bindings.data()};
   mDescriptorSetLayout = vk::raii::DescriptorSetLayout(mDevice.device, layoutInfo);
-}
-
-void Renderer::createGraphicsPipeline() {
-  auto shaderModule = createShaderModule(mDevice.device, file::ReadFile("assets/shaders/slang.spv"));
-
-  vk::PipelineShaderStageCreateInfo vertShaderStageInfo{.stage = vk::ShaderStageFlagBits::eVertex, .module = shaderModule, .pName = "vertMain"};
-  vk::PipelineShaderStageCreateInfo fragShaderStageInfo{.stage = vk::ShaderStageFlagBits::eFragment, .module = shaderModule, .pName = "fragMain"};
-  vk::PipelineShaderStageCreateInfo shaderStages[] = {vertShaderStageInfo, fragShaderStageInfo};
-
-  std::vector dynamicStates = {vk::DynamicState::eViewport, vk::DynamicState::eScissor};
-
-  vk::PipelineDynamicStateCreateInfo dynamicState{
-    .dynamicStateCount = static_cast<uint32_t>(dynamicStates.size()),
-    .pDynamicStates = dynamicStates.data(),
-  };
-
-  auto bindingDescription = mMesh.GetBindingDescription();
-  auto attributeDescriptions = mMesh.GetAttributeDescriptions();
-  vk::PipelineVertexInputStateCreateInfo vertexInputInfo{
-    .vertexBindingDescriptionCount = 1,
-    .pVertexBindingDescriptions = &bindingDescription,
-    .vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescriptions.size()),
-    .pVertexAttributeDescriptions = attributeDescriptions.data(),
-  };
-
-  vk::PipelineInputAssemblyStateCreateInfo inputAssembly{.topology = vk::PrimitiveTopology::eTriangleList};
-
-  vk::Viewport viewport{0.0f, 0.0f, static_cast<float>(mSwapChain.extent.width), static_cast<float>(mSwapChain.extent.height), 0.0f, 1.0f};
-  vk::Rect2D scissor{{0, 0}, mSwapChain.extent};
-  vk::PipelineViewportStateCreateInfo viewportState{
-    .viewportCount = 1,
-    .pViewports = &viewport,
-    .scissorCount = 1,
-    .pScissors = &scissor,
-  };
-
-  vk::PipelineRasterizationStateCreateInfo rasterizer{
-    .depthClampEnable = vk::False,
-    .rasterizerDiscardEnable = vk::False,
-    .polygonMode = vk::PolygonMode::eFill,
-    .cullMode = vk::CullModeFlagBits::eBack,
-    .frontFace = vk::FrontFace::eCounterClockwise,
-    .depthBiasEnable = vk::False,
-    .depthBiasSlopeFactor = 1.0f,
-    .lineWidth = 1.0f,
-  };
-
-  vk::PipelineMultisampleStateCreateInfo multisampling{.rasterizationSamples = vk::SampleCountFlagBits::e1, .sampleShadingEnable = vk::False};
-
-  vk::PipelineDepthStencilStateCreateInfo depthStencil{
-    .depthTestEnable = vk::True,
-    .depthWriteEnable = vk::True,
-    .depthCompareOp = vk::CompareOp::eLess,
-    .depthBoundsTestEnable = vk::False,
-    .stencilTestEnable = vk::False,
-  };
-
-  vk::PipelineColorBlendAttachmentState colorBlendAttachment{
-    .blendEnable = vk::False,
-    .colorWriteMask =
-      vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG | vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA,
-  };
-
-  vk::PipelineColorBlendStateCreateInfo colorBlending{
-    .logicOpEnable = vk::False, .logicOp = vk::LogicOp::eCopy, .attachmentCount = 1, .pAttachments = &colorBlendAttachment};
-
-  vk::PipelineLayoutCreateInfo pipelineLayoutInfo{.setLayoutCount = 1, .pSetLayouts = &*mDescriptorSetLayout, .pushConstantRangeCount = 0};
-  mPipelineLayout = vk::raii::PipelineLayout(mDevice.device, pipelineLayoutInfo);
-
-  vk::PipelineRenderingCreateInfo pipelineRenderingCreateInfo{
-    .colorAttachmentCount = 1, .pColorAttachmentFormats = &mSwapChain.format.format, .depthAttachmentFormat = mSwapChain.depthFormat};
-  vk::GraphicsPipelineCreateInfo pipelineInfo{
-    .pNext = &pipelineRenderingCreateInfo,
-    .stageCount = 2,
-    .pStages = shaderStages,
-    .pVertexInputState = &vertexInputInfo,
-    .pInputAssemblyState = &inputAssembly,
-    .pViewportState = &viewportState,
-    .pRasterizationState = &rasterizer,
-    .pMultisampleState = &multisampling,
-    .pDepthStencilState = &depthStencil,
-    .pColorBlendState = &colorBlending,
-    .pDynamicState = &dynamicState,
-    .layout = mPipelineLayout,
-    .renderPass = nullptr,
-  };
-
-  mGraphicsPipeline = vk::raii::Pipeline(mDevice.device, nullptr, pipelineInfo);
 }
 
 void Renderer::createCommandPools() {
@@ -518,7 +432,7 @@ void Renderer::recordCommandBuffer(uint32_t imageIdx) {
 
   mFrameData[mFrameIdx].cmd.beginRendering(renderingInfo);
 
-  mFrameData[mFrameIdx].cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, mGraphicsPipeline);
+  mFrameData[mFrameIdx].cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, mGraphicsPipeline.pipeline);
 
   mFrameData[mFrameIdx].cmd.setViewport(
     0, vk::Viewport{0.0f, 0.0f, static_cast<float>(mSwapChain.extent.width), static_cast<float>(mSwapChain.extent.height), 0.0f, 1.0f});
@@ -526,7 +440,7 @@ void Renderer::recordCommandBuffer(uint32_t imageIdx) {
 
   mFrameData[mFrameIdx].cmd.bindVertexBuffers(0, {mMeshBuffer.buffer}, {0});
   mFrameData[mFrameIdx].cmd.bindIndexBuffer(mMeshBuffer.buffer, mMesh.GetVerticesSizeBytes(), mMesh.GetVkIndexType());
-  mFrameData[mFrameIdx].cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, mPipelineLayout, 0, *mDescriptorSets[mFrameIdx], nullptr);
+  mFrameData[mFrameIdx].cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, mGraphicsPipeline.layout, 0, *mDescriptorSets[mFrameIdx], nullptr);
   mFrameData[mFrameIdx].cmd.drawIndexed(mMesh.indices.size(), 1, 0, 0, 0);
 
   mFrameData[mFrameIdx].cmd.endRendering();
