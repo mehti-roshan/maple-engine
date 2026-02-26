@@ -380,11 +380,14 @@ void Renderer::createDescriptorSets() {
 }
 
 void Renderer::recordCommandBuffer(uint32_t imageIdx) {
-  mFrameData[mFrameIdx].cmd.begin({});
+  auto& cmd = mFrameData[mFrameIdx].cmd;
+  auto& swapchainImg = mSwapChain.images[imageIdx].img;
+
+  cmd.begin({});
 
   // Color attachment transition
-  transition_image_layout(mSwapChain.images[imageIdx].img,
-                          mFrameData[mFrameIdx].cmd,
+  transition_image_layout(swapchainImg,
+                          cmd,
                           vk::ImageLayout::eUndefined,
                           vk::ImageLayout::eColorAttachmentOptimal,
                           {},
@@ -395,7 +398,7 @@ void Renderer::recordCommandBuffer(uint32_t imageIdx) {
 
   // Depth attachment transition
   transition_image_layout(mSwapChain.depthTexture.image.image,
-                          mFrameData[mFrameIdx].cmd,
+                          cmd,
                           vk::ImageLayout::eUndefined,
                           vk::ImageLayout::eDepthStencilAttachmentOptimal,
                           vk::AccessFlagBits2::eDepthStencilAttachmentRead,
@@ -430,23 +433,23 @@ void Renderer::recordCommandBuffer(uint32_t imageIdx) {
     .pDepthAttachment = &depthAttachmentInfo,
   };
 
-  mFrameData[mFrameIdx].cmd.beginRendering(renderingInfo);
+  cmd.beginRendering(renderingInfo);
 
-  mFrameData[mFrameIdx].cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, mGraphicsPipeline.pipeline);
+  cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, mGraphicsPipeline.pipeline);
 
-  mFrameData[mFrameIdx].cmd.setViewport(
+  cmd.setViewport(
     0, vk::Viewport{0.0f, 0.0f, static_cast<float>(mSwapChain.extent.width), static_cast<float>(mSwapChain.extent.height), 0.0f, 1.0f});
-  mFrameData[mFrameIdx].cmd.setScissor(0, vk::Rect2D(vk::Offset2D(0, 0), mSwapChain.extent));
+  cmd.setScissor(0, vk::Rect2D(vk::Offset2D(0, 0), mSwapChain.extent));
 
-  mFrameData[mFrameIdx].cmd.bindVertexBuffers(0, {mMeshBuffer.buffer}, {0});
-  mFrameData[mFrameIdx].cmd.bindIndexBuffer(mMeshBuffer.buffer, mMesh.GetVerticesSizeBytes(), mMesh.GetVkIndexType());
-  mFrameData[mFrameIdx].cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, mGraphicsPipeline.layout, 0, *mDescriptorSets[mFrameIdx], nullptr);
-  mFrameData[mFrameIdx].cmd.drawIndexed(mMesh.indices.size(), 1, 0, 0, 0);
+  cmd.bindVertexBuffers(0, {mMeshBuffer.buffer}, {0});
+  cmd.bindIndexBuffer(mMeshBuffer.buffer, mMesh.GetVerticesSizeBytes(), mMesh.GetVkIndexType());
+  cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, mGraphicsPipeline.layout, 0, *mDescriptorSets[mFrameIdx], nullptr);
+  cmd.drawIndexed(mMesh.indices.size(), 1, 0, 0, 0);
 
-  mFrameData[mFrameIdx].cmd.endRendering();
+  cmd.endRendering();
 
-  transition_image_layout(mSwapChain.images[imageIdx].img,
-                          mFrameData[mFrameIdx].cmd,
+  transition_image_layout(swapchainImg,
+                          cmd,
                           vk::ImageLayout::eColorAttachmentOptimal,
                           vk::ImageLayout::ePresentSrcKHR,
                           vk::AccessFlagBits2::eColorAttachmentWrite,
@@ -454,7 +457,7 @@ void Renderer::recordCommandBuffer(uint32_t imageIdx) {
                           vk::PipelineStageFlagBits2::eColorAttachmentOutput,
                           vk::PipelineStageFlagBits2::eBottomOfPipe,
                           vk::ImageAspectFlagBits::eColor);
-  mFrameData[mFrameIdx].cmd.end();
+  cmd.end();
 }
 
 void Renderer::createFrameData() {
