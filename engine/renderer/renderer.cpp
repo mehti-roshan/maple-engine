@@ -500,36 +500,6 @@ void Renderer::createMeshBuffer() {
   copyBuffer(stage.buffer, mMeshBuffer.buffer, stage.size);
 }
 
-// void Renderer::createVertexBuffer() {
-//   auto stage = mMemoryManager.createBuffer(sizeof(mesh.vertices[0]) * mesh.vertices.size(),
-//                                            vk::BufferUsageFlagBits::eTransferSrc,
-//                                            VMA_MEMORY_USAGE_AUTO,
-//                                            VMA_ALLOCATION_CREATE_MAPPED_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-
-//   stage.Upload(mesh.vertices.data(), stage.size);
-
-//   mVertexBuffer =
-//     mMemoryManager.createBuffer(stage.size, vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eVertexBuffer, VMA_MEMORY_USAGE_AUTO,
-//     0);
-
-//   copyBuffer(stage.buffer, mVertexBuffer.buffer, stage.size);
-// }
-
-// void Renderer::createIndexBuffer() {
-//   auto stage = mMemoryManager.createBuffer(sizeof(mesh.indices[0]) * mesh.indices.size(),
-//                                            vk::BufferUsageFlagBits::eTransferSrc,
-//                                            VMA_MEMORY_USAGE_AUTO,
-//                                            VMA_ALLOCATION_CREATE_MAPPED_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-
-//   stage.Upload(mesh.indices.data(), stage.size);
-
-//   mIndexBuffer =
-//     mMemoryManager.createBuffer(stage.size, vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eIndexBuffer, VMA_MEMORY_USAGE_AUTO,
-//     0);
-
-//   copyBuffer(stage.buffer, mIndexBuffer.buffer, stage.size);
-// }
-
 void Renderer::createUniformBuffers() {
   mUniformBuffers.clear();
 
