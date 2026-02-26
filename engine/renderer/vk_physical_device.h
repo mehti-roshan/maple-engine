@@ -174,7 +174,7 @@ struct VulkanPhysicalDevice {
 
     score += static_cast<float>(deviceProperties.properties.limits.maxImageDimension2D);
 
-    if (queueFamilyIndices.graphics != queueFamilyIndices.present) score += 500.0f;  // TODO: ???
+    if (queueFamilyIndices.graphics != queueFamilyIndices.present) score += 500.0f;
 
     return score;
   }
