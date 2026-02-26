@@ -105,7 +105,6 @@ class Renderer {
 
   void createDescriptorSetLayout();
   void createCommandPools();
-  void createDepthResources();
   void createUniformBuffers();
   void createDescriptorPool();
   void createDescriptorSets();
