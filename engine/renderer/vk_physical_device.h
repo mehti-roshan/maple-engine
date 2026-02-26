@@ -91,7 +91,7 @@ struct VulkanPhysicalDevice {
   }
 
   vk::SurfaceCapabilitiesKHR SurfaceCapabilities() const { return device.getSurfaceCapabilitiesKHR(*mSurface); }
-  std::vector<vk::SurfaceFormatKHR> SurfaceFormats() { return device.getSurfaceFormatsKHR(*mSurface); }
+  std::vector<vk::SurfaceFormatKHR> SurfaceFormats() const { return device.getSurfaceFormatsKHR(*mSurface); }
 
  private:
   const vk::raii::SurfaceKHR* mSurface;
