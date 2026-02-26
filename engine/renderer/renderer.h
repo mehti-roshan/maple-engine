@@ -4,6 +4,7 @@
 #include <glm/glm.hpp>
 #include "engine/renderer/vk_logical_device.h"
 #include "engine/renderer/vk_physical_device.h"
+#include "engine/renderer/vk_swapchain.h"
 #define GLM_ENABLE_EXPERIMENTAL
 #include <engine/third_party/vma/vk_mem_alloc.h>
 
@@ -18,22 +19,8 @@
 #include "engine/renderer/vk_memory_manager.h"
 #include "engine/renderer/vk_sampler.h"
 #include "engine/renderer/vk_texture.h"
-#include "log_macros.h"
 
 #include "vk_instance_ctx.h"
-
-typedef struct VkInstance_T* VkInstance;
-typedef struct VkSurfaceKHR_T* VkSurfaceKHR;
-
-// creates a VkSurfaceKHR using the provided VkInstance
-using SurfaceCreateCallback = std::function<VkSurfaceKHR(VkInstance)>;
-// query the framebuffer size from the window library
-using FrameBufferSizeCallback = std::function<void(uint32_t&, uint32_t&)>;
-
-struct SwapChainDetails {
-  vk::SurfaceFormatKHR format;
-  vk::Extent2D extent;
-};
 
 struct CommandPools {
   vk::raii::CommandPool graphics = nullptr;
@@ -92,10 +79,7 @@ class Renderer {
   VulkanPhysicalDevice mPhysicalDevice;
   VulkanLogicalDevice mDevice;
   VulkanMemoryManager mMemoryManager;
-  vk::raii::SwapchainKHR mSwapChain = nullptr;
-  SwapChainDetails mSwapChainDetails;
-  std::vector<vk::Image> mSwapChainImages;
-  std::vector<vk::raii::ImageView> mSwapChainImageViews;
+  VulkanSwapChain mSwapChain;
 
   vk::raii::DescriptorSetLayout mDescriptorSetLayout = nullptr;
   vk::raii::DescriptorPool mDescriptorPool = nullptr;
@@ -116,13 +100,9 @@ class Renderer {
 
   std::vector<VulkanBuffer> mUniformBuffers;
 
-  VulkanTexture mDepthImage;
-
   VulkanTexture mTexture;
   VulkanSampler mSampler;
 
-  void createSwapChain();
-  void createImageViews();
   void createDescriptorSetLayout();
   void createGraphicsPipeline();
   void createCommandPools();
@@ -139,31 +119,8 @@ class Renderer {
   void createTextureSampler();
   void createMeshBuffer();
 
-  void recreateSwapChain();
-  void cleanupSwapChain();
-
   void recordCommandBuffer(uint32_t imageIdx);
   void updateUniformBuffer(uint32_t currentImage);
-
-  vk::Format findSupportedFormat(const std::vector<vk::Format>& candidates, vk::ImageTiling tiling, vk::FormatFeatureFlags features) {
-    for (vk::Format format : candidates) {
-      vk::FormatProperties props = mPhysicalDevice.device.getFormatProperties(format);
-
-      if (tiling == vk::ImageTiling::eLinear && (props.linearTilingFeatures & features) == features) {
-        return format;
-      } else if (tiling == vk::ImageTiling::eOptimal && (props.optimalTilingFeatures & features) == features) {
-        return format;
-      }
-    }
-
-    MAPLE_FATAL("Failed to find supported format");
-  }
-
-  vk::Format findDepthFormat() {
-    return findSupportedFormat({vk::Format::eD32Sfloat, vk::Format::eD32SfloatS8Uint, vk::Format::eD24UnormS8Uint},
-                               vk::ImageTiling::eOptimal,
-                               vk::FormatFeatureFlagBits::eDepthStencilAttachment);
-  }
 
   void copyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, vk::DeviceSize size) {
     auto commandCopyBuffer = beginSingleTimeCommands();

@@ -2,7 +2,6 @@
 #include <engine/logging/log_macros.h>
 #include <engine/renderer/renderer.h>
 
-#include <algorithm>
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
@@ -15,6 +14,7 @@
 #include "engine/renderer/vk_instance_ctx.h"
 #include "engine/renderer/vk_logical_device.h"
 #include "engine/renderer/vk_sampler.h"
+#include "engine/renderer/vk_swapchain.h"
 #include "engine/renderer/vk_texture.h"
 
 #define GLM_FORCE_RADIANS
@@ -36,34 +36,6 @@ constexpr bool debug = false;
 #else
 constexpr bool debug = true;
 #endif
-
-vk::SurfaceFormatKHR chooseSwapSurfaceFormat(const std::vector<vk::SurfaceFormatKHR>& availableFormats) {
-  for (const auto& availableFormat : availableFormats)
-    if (availableFormat.format == vk::Format::eB8G8R8A8Srgb && availableFormat.colorSpace == vk::ColorSpaceKHR::eSrgbNonlinear)
-      return availableFormat;
-
-  return availableFormats[0];
-}
-
-vk::PresentModeKHR chooseSwapPresentMode(const std::vector<vk::PresentModeKHR>& availablePresentModes) {
-  for (const auto& availablePresentMode : availablePresentModes) {
-    if (availablePresentMode == vk::PresentModeKHR::eMailbox) {
-      return availablePresentMode;
-    }
-  }
-  return vk::PresentModeKHR::eFifo;
-}
-
-vk::Extent2D chooseSwapExtent(const vk::SurfaceCapabilitiesKHR& capabilities, FrameBufferSizeCallback fbCallback) {
-  if (capabilities.currentExtent.width != std::numeric_limits<uint32_t>::max()) {
-    return capabilities.currentExtent;
-  }
-  uint32_t width, height;
-  fbCallback(width, height);
-
-  return {std::clamp(width, capabilities.minImageExtent.width, capabilities.maxImageExtent.width),
-          std::clamp(height, capabilities.minImageExtent.height, capabilities.maxImageExtent.height)};
-}
 
 [[nodiscard]] vk::raii::ShaderModule createShaderModule(vk::raii::Device& device, const std::vector<char>& code) {
   vk::ShaderModuleCreateInfo createInfo{
@@ -129,12 +101,14 @@ void Renderer::Init(const std::vector<const char*>& glfwExtensions, SurfaceCreat
   });
 
   mMemoryManager = VulkanMemoryManager(mInstanceCtx.mInstance, mPhysicalDevice.device, &mDevice.device);
-  createSwapChain();
-  createImageViews();
+  mSwapChain = VulkanSwapChain({.physicalDevice = mPhysicalDevice,
+                                .device = mDevice,
+                                .surface = mSurface,
+                                .memoryManager = mMemoryManager,
+                                .framebufferSizeCb = mFrameBufferSizeCallback});
   createDescriptorSetLayout();
   createGraphicsPipeline();
   createCommandPools();
-  createDepthResources();
   createFrameData();
   createTexture();
   createTextureSampler();
@@ -146,7 +120,7 @@ void Renderer::Init(const std::vector<const char*>& glfwExtensions, SurfaceCreat
 
 void Renderer::DrawFrame() {
   auto fenceResult = mDevice.device.waitForFences(*mFrameData[mFrameIdx].drawFence, vk::True, UINT64_MAX);
-  auto [result, imageIdx] = mSwapChain.acquireNextImage(UINT64_MAX, mFrameData[mFrameIdx].presentCompleteSem, nullptr);
+  auto [result, imageIdx] = mSwapChain.swapchain.acquireNextImage(UINT64_MAX, mFrameData[mFrameIdx].presentCompleteSem, nullptr);
   mDevice.device.resetFences(*mFrameData[mFrameIdx].drawFence);
 
   mFrameData[mFrameIdx].cmd.reset();
@@ -171,7 +145,7 @@ void Renderer::DrawFrame() {
     .waitSemaphoreCount = 1,
     .pWaitSemaphores = &*mRenderCompleteSems[imageIdx],
     .swapchainCount = 1,
-    .pSwapchains = &*mSwapChain,
+    .pSwapchains = &*mSwapChain.swapchain,
     .pImageIndices = &imageIdx,
   };
 
@@ -179,7 +153,11 @@ void Renderer::DrawFrame() {
 
   if (presentResult == vk::Result::eErrorOutOfDateKHR || presentResult == vk::Result::eSuboptimalKHR || mFrameBufferResized) {
     mFrameBufferResized = false;
-    recreateSwapChain();
+    mSwapChain.ReCreate({.physicalDevice = mPhysicalDevice,
+                         .device = mDevice,
+                         .surface = mSurface,
+                         .memoryManager = mMemoryManager,
+                         .framebufferSizeCb = mFrameBufferSizeCallback});
   } else if (presentResult != vk::Result::eSuccess) {
     MAPLE_FATAL("Failed to present swap chain image");
   }
@@ -197,75 +175,10 @@ void Renderer::updateUniformBuffer(uint32_t currentImage) {
     .model = glm::rotate(glm::mat4(1.0f), time * glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f)),
     .view = glm::lookAt(glm::vec3(2.0f), glm::vec3(0.0f), glm::vec3(0.0f, 0.0f, 1.0f)),
     .proj = glm::perspective(
-      glm::radians(45.0f), static_cast<float>(mSwapChainDetails.extent.width) / static_cast<float>(mSwapChainDetails.extent.height), 0.1f, 2000.0f)};
+      glm::radians(45.0f), static_cast<float>(mSwapChain.extent.width) / static_cast<float>(mSwapChain.extent.height), 0.1f, 2000.0f)};
   ubo.proj[1][1] *= -1;  // Invert Y for Vulkan
 
   mUniformBuffers[currentImage].Upload(&ubo, sizeof(ubo));
-}
-
-void Renderer::createSwapChain() {
-  auto surfaceCapabilities = mPhysicalDevice.SurfaceCapabilities();
-  mSwapChainDetails.format = chooseSwapSurfaceFormat(mPhysicalDevice.SurfaceFormats());
-  mSwapChainDetails.extent = chooseSwapExtent(surfaceCapabilities, mFrameBufferSizeCallback);
-
-  auto minImageCount = std::max(3u, surfaceCapabilities.minImageCount);
-  minImageCount =
-    (surfaceCapabilities.maxImageCount > 0 && minImageCount > surfaceCapabilities.maxImageCount) ? surfaceCapabilities.maxImageCount : minImageCount;
-
-  vk::SwapchainCreateInfoKHR swapChainCreateInfo{
-    .flags = vk::SwapchainCreateFlagsKHR(),
-    .surface = *mSurface,
-    .minImageCount = minImageCount,
-    .imageFormat = mSwapChainDetails.format.format,
-    .imageColorSpace = mSwapChainDetails.format.colorSpace,
-    .imageExtent = mSwapChainDetails.extent,
-    .imageArrayLayers = 1,
-    .imageUsage = vk::ImageUsageFlagBits::eColorAttachment,
-    .imageSharingMode = vk::SharingMode::eExclusive,
-    .preTransform = surfaceCapabilities.currentTransform,
-    .compositeAlpha = vk::CompositeAlphaFlagBitsKHR::eOpaque,
-    .presentMode = chooseSwapPresentMode(mPhysicalDevice.device.getSurfacePresentModesKHR(*mSurface)),
-    .clipped = true,
-    .oldSwapchain = nullptr,
-  };
-
-  auto qIndices = mPhysicalDevice.queueFamilyIndices;
-  uint32_t queueFamilyIndices[] = {qIndices.graphics, qIndices.present};
-
-  if (qIndices.graphics != qIndices.present) {
-    swapChainCreateInfo.imageSharingMode = vk::SharingMode::eConcurrent;
-    swapChainCreateInfo.queueFamilyIndexCount = 2;
-    swapChainCreateInfo.pQueueFamilyIndices = queueFamilyIndices;
-  } else {
-    swapChainCreateInfo.imageSharingMode = vk::SharingMode::eExclusive;
-    swapChainCreateInfo.queueFamilyIndexCount = 0;      // Optional
-    swapChainCreateInfo.pQueueFamilyIndices = nullptr;  // Optional
-  }
-
-  mSwapChain = vk::raii::SwapchainKHR(mDevice.device, swapChainCreateInfo);
-  mSwapChainImages = mSwapChain.getImages();
-}
-
-void Renderer::createImageViews() {
-  mSwapChainImageViews.clear();
-
-  vk::ImageViewCreateInfo imageViewCreateInfo{
-    .viewType = vk::ImageViewType::e2D,
-    .format = mSwapChainDetails.format.format,
-    .components =
-      {
-        vk::ComponentSwizzle::eIdentity,
-        vk::ComponentSwizzle::eIdentity,
-        vk::ComponentSwizzle::eIdentity,
-        vk::ComponentSwizzle::eIdentity,
-      },
-    .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1},
-  };
-
-  for (auto& image : mSwapChainImages) {
-    imageViewCreateInfo.image = image;
-    mSwapChainImageViews.emplace_back(mDevice.device, imageViewCreateInfo);
-  }
 }
 
 void Renderer::createDescriptorSetLayout() {
@@ -313,9 +226,8 @@ void Renderer::createGraphicsPipeline() {
 
   vk::PipelineInputAssemblyStateCreateInfo inputAssembly{.topology = vk::PrimitiveTopology::eTriangleList};
 
-  vk::Viewport viewport{
-    0.0f, 0.0f, static_cast<float>(mSwapChainDetails.extent.width), static_cast<float>(mSwapChainDetails.extent.height), 0.0f, 1.0f};
-  vk::Rect2D scissor{{0, 0}, mSwapChainDetails.extent};
+  vk::Viewport viewport{0.0f, 0.0f, static_cast<float>(mSwapChain.extent.width), static_cast<float>(mSwapChain.extent.height), 0.0f, 1.0f};
+  vk::Rect2D scissor{{0, 0}, mSwapChain.extent};
   vk::PipelineViewportStateCreateInfo viewportState{
     .viewportCount = 1,
     .pViewports = &viewport,
@@ -357,7 +269,7 @@ void Renderer::createGraphicsPipeline() {
   mPipelineLayout = vk::raii::PipelineLayout(mDevice.device, pipelineLayoutInfo);
 
   vk::PipelineRenderingCreateInfo pipelineRenderingCreateInfo{
-    .colorAttachmentCount = 1, .pColorAttachmentFormats = &mSwapChainDetails.format.format, .depthAttachmentFormat = findDepthFormat()};
+    .colorAttachmentCount = 1, .pColorAttachmentFormats = &mSwapChain.format.format, .depthAttachmentFormat = mSwapChain.depthFormat};
   vk::GraphicsPipelineCreateInfo pipelineInfo{
     .pNext = &pipelineRenderingCreateInfo,
     .stageCount = 2,
@@ -389,14 +301,6 @@ void Renderer::createCommandPools() {
   poolInfo.flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer;
   poolInfo.queueFamilyIndex = qIndices.transfer;
   mCommandPools.transfer = vk::raii::CommandPool(mDevice.device, poolInfo);
-}
-
-void Renderer::createDepthResources() {
-  vk::Format depthFormat = findDepthFormat();
-  mDepthImage = mMemoryManager.createTexture({mSwapChainDetails.extent.width, mSwapChainDetails.extent.height, 1},
-                                             depthFormat,
-                                             vk::ImageUsageFlagBits::eDepthStencilAttachment,
-                                             vk::ImageAspectFlagBits::eDepth);
 }
 
 void Renderer::createTexture() {
@@ -565,7 +469,7 @@ void Renderer::recordCommandBuffer(uint32_t imageIdx) {
   mFrameData[mFrameIdx].cmd.begin({});
 
   // Color attachment transition
-  transition_image_layout(mSwapChainImages[imageIdx],
+  transition_image_layout(mSwapChain.images[imageIdx].img,
                           mFrameData[mFrameIdx].cmd,
                           vk::ImageLayout::eUndefined,
                           vk::ImageLayout::eColorAttachmentOptimal,
@@ -576,7 +480,7 @@ void Renderer::recordCommandBuffer(uint32_t imageIdx) {
                           vk::ImageAspectFlagBits::eColor);
 
   // Depth attachment transition
-  transition_image_layout(mDepthImage.image.image,
+  transition_image_layout(mSwapChain.depthTexture.image.image,
                           mFrameData[mFrameIdx].cmd,
                           vk::ImageLayout::eUndefined,
                           vk::ImageLayout::eDepthStencilAttachmentOptimal,
@@ -589,7 +493,7 @@ void Renderer::recordCommandBuffer(uint32_t imageIdx) {
   vk::ClearValue clearColor = vk::ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f);
   vk::ClearValue clearDepth = vk::ClearDepthStencilValue(1.0f, 0);
   vk::RenderingAttachmentInfo depthAttachmentInfo = {
-    .imageView = mDepthImage.view,
+    .imageView = mSwapChain.depthTexture.view,
     .imageLayout = vk::ImageLayout::eDepthAttachmentOptimal,
     .loadOp = vk::AttachmentLoadOp::eClear,
     .storeOp = vk::AttachmentStoreOp::eDontCare,
@@ -597,7 +501,7 @@ void Renderer::recordCommandBuffer(uint32_t imageIdx) {
   };
 
   vk::RenderingAttachmentInfo colorAttachmentInfo = {
-    .imageView = mSwapChainImageViews[imageIdx],
+    .imageView = mSwapChain.images[imageIdx].view,
     .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
     .loadOp = vk::AttachmentLoadOp::eClear,
     .storeOp = vk::AttachmentStoreOp::eStore,
@@ -605,7 +509,7 @@ void Renderer::recordCommandBuffer(uint32_t imageIdx) {
   };
 
   vk::RenderingInfo renderingInfo = {
-    .renderArea = {.offset = {0, 0}, .extent = mSwapChainDetails.extent},
+    .renderArea = {.offset = {0, 0}, .extent = mSwapChain.extent},
     .layerCount = 1,
     .colorAttachmentCount = 1,
     .pColorAttachments = &colorAttachmentInfo,
@@ -617,8 +521,8 @@ void Renderer::recordCommandBuffer(uint32_t imageIdx) {
   mFrameData[mFrameIdx].cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, mGraphicsPipeline);
 
   mFrameData[mFrameIdx].cmd.setViewport(
-    0, vk::Viewport{0.0f, 0.0f, static_cast<float>(mSwapChainDetails.extent.width), static_cast<float>(mSwapChainDetails.extent.height), 0.0f, 1.0f});
-  mFrameData[mFrameIdx].cmd.setScissor(0, vk::Rect2D(vk::Offset2D(0, 0), mSwapChainDetails.extent));
+    0, vk::Viewport{0.0f, 0.0f, static_cast<float>(mSwapChain.extent.width), static_cast<float>(mSwapChain.extent.height), 0.0f, 1.0f});
+  mFrameData[mFrameIdx].cmd.setScissor(0, vk::Rect2D(vk::Offset2D(0, 0), mSwapChain.extent));
 
   mFrameData[mFrameIdx].cmd.bindVertexBuffers(0, {mMeshBuffer.buffer}, {0});
   mFrameData[mFrameIdx].cmd.bindIndexBuffer(mMeshBuffer.buffer, mMesh.GetVerticesSizeBytes(), mMesh.GetVkIndexType());
@@ -627,7 +531,7 @@ void Renderer::recordCommandBuffer(uint32_t imageIdx) {
 
   mFrameData[mFrameIdx].cmd.endRendering();
 
-  transition_image_layout(mSwapChainImages[imageIdx],
+  transition_image_layout(mSwapChain.images[imageIdx].img,
                           mFrameData[mFrameIdx].cmd,
                           vk::ImageLayout::eColorAttachmentOptimal,
                           vk::ImageLayout::ePresentSrcKHR,
@@ -658,29 +562,8 @@ void Renderer::createFrameData() {
   }
 
   mRenderCompleteSems.clear();
-  mRenderCompleteSems.reserve(mSwapChainImages.size());
-  for (size_t i = 0; i < mSwapChainImageViews.size(); i++) mRenderCompleteSems.emplace_back(mDevice.device, vk::SemaphoreCreateInfo{});
-}
-
-void Renderer::cleanupSwapChain() {
-  mSwapChainImageViews.clear();
-  mSwapChain = nullptr;
-}
-
-void Renderer::recreateSwapChain() {
-  uint32_t width, height;
-  mFrameBufferSizeCallback(width, height);
-  while (width == 0 || height == 0) {
-    MAPLE_DEBUG("minimized...");
-    mFrameBufferSizeCallback(width, height);
-  }
-  mDevice.device.waitIdle();
-
-  cleanupSwapChain();
-
-  createSwapChain();
-  createImageViews();
-  createDepthResources();
+  mRenderCompleteSems.reserve(mSwapChain.images.size());
+  for (size_t i = 0; i < mSwapChain.images.size(); i++) mRenderCompleteSems.emplace_back(mDevice.device, vk::SemaphoreCreateInfo{});
 }
 
 }  // namespace maple
