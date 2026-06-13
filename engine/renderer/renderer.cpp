@@ -13,13 +13,14 @@
 #include <vector>
 #include <vulkan/vulkan_enums.hpp>
 
+#include "engine/renderer/mvk/mvk_descriptor_pool.h"
+#include "engine/renderer/mvk/mvk_descriptor_sets.h"
 #include "engine/renderer/mvk/mvk_pipeline.h"
 #include "engine/renderer/vk_buffer.h"
 #include "engine/renderer/vk_device_features.h"
 #include "engine/renderer/vk_instance_ctx.h"
 #include "engine/renderer/vk_logical_device.h"
 #include "engine/renderer/vk_sampler.h"
-#include "engine/renderer/vk_swapchain.h"
 #include "engine/renderer/vk_texture.h"
 
 #define GLM_FORCE_RADIANS
@@ -35,6 +36,7 @@
 #include <engine/third_party/tiny_obj_loader.h>
 
 #include "vk_physical_device.h"
+#include "vkh/transition_image_layout.h"
 
 #ifdef NDEBUG
 constexpr bool debug = false;
@@ -43,30 +45,6 @@ constexpr bool debug = true;
 #endif
 
 size_t numInstances = 10;
-
-void transition_image_layout(vk::Image image,
-                             vk::CommandBuffer commandBuffer,
-                             vk::ImageLayout oldLayout,
-                             vk::ImageLayout newLayout,
-                             vk::AccessFlags2 srcAccessMask,
-                             vk::AccessFlags2 dstAccessMask,
-                             vk::PipelineStageFlags2 srcStageMask,
-                             vk::PipelineStageFlags2 dstStageMask,
-                             vk::ImageAspectFlags aspectFlags) {
-  vk::ImageMemoryBarrier2 barrier = {
-    .srcStageMask = srcStageMask,
-    .srcAccessMask = srcAccessMask,
-    .dstStageMask = dstStageMask,
-    .dstAccessMask = dstAccessMask,
-    .oldLayout = oldLayout,
-    .newLayout = newLayout,
-    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-    .image = image,
-    .subresourceRange = {.aspectMask = aspectFlags, .baseMipLevel = 0, .levelCount = 1, .baseArrayLayer = 0, .layerCount = 1}};
-  vk::DependencyInfo dependencyInfo = {.dependencyFlags = {}, .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &barrier};
-  commandBuffer.pipelineBarrier2(dependencyInfo);
-}
 
 struct UniformBufferObject {
   // glm::mat4 model;
@@ -104,7 +82,15 @@ void Renderer::Init(const std::vector<const char*>& glfwExtensions, SurfaceCreat
                                 .surface = mSurface,
                                 .memoryManager = mMemoryManager,
                                 .framebufferSizeCb = mFrameBufferSizeCallback});
-  createDescriptorSetLayout();
+  
+  createCommandPools();
+  createFrameData();
+  createMeshBuffer();
+  createUniformBuffers();
+  createTexture();
+  createTextureSampler();
+  createDescriptorPool();
+  createDescriptorSets();
   mPipeline = mvk::Pipeline(mvk::Pipeline::CreateInfo{
     .shaderFile = "assets/shaders/slang.spv",
     .device = mDevice.device,
@@ -114,21 +100,13 @@ void Renderer::Init(const std::vector<const char*>& glfwExtensions, SurfaceCreat
         .format = mSwapChain.format,
         .depthFormat = mSwapChain.depthFormat,
       },
-    .descriptorSetLayout = mDescriptorSetLayout,
+    .descriptorSetLayout = mDescriptorSets.layout,
     .vertexLayoutDescription =
       {
         mMesh.GetBindingDescription(),
         mMesh.GetAttributeDescriptions(),
       },
   });
-  createCommandPools();
-  createFrameData();
-  createTexture();
-  createTextureSampler();
-  createMeshBuffer();
-  createUniformBuffers();
-  createDescriptorPool();
-  createDescriptorSets();
 }
 
 void Renderer::DrawFrame() {
@@ -209,32 +187,6 @@ void Renderer::updateUniformBuffer(uint32_t currentImage) {
   }
 
   mInstanceDataSSBOs[currentImage].Upload(modelMatrices.data(), modelMatrices.size() * sizeof(decltype(modelMatrices)::value_type));
-}
-
-void Renderer::createDescriptorSetLayout() {
-  std::array bindings = {
-    vk::DescriptorSetLayoutBinding{
-      .binding = 0,
-      .descriptorType = vk::DescriptorType::eUniformBuffer,
-      .descriptorCount = 1,
-      .stageFlags = vk::ShaderStageFlagBits::eVertex,
-    },
-    vk::DescriptorSetLayoutBinding{
-      .binding = 1,
-      .descriptorType = vk::DescriptorType::eCombinedImageSampler,
-      .descriptorCount = 1,
-      .stageFlags = vk::ShaderStageFlagBits::eFragment,
-    },
-    vk::DescriptorSetLayoutBinding{
-      .binding = 2,
-      .descriptorType = vk::DescriptorType::eStorageBuffer,
-      .descriptorCount = 1,
-      .stageFlags = vk::ShaderStageFlagBits::eVertex,
-    },
-  };
-
-  vk::DescriptorSetLayoutCreateInfo layoutInfo{.bindingCount = bindings.size(), .pBindings = bindings.data()};
-  mDescriptorSetLayout = vk::raii::DescriptorSetLayout(mDevice.device, layoutInfo);
 }
 
 void Renderer::createCommandPools() {
@@ -376,32 +328,40 @@ void Renderer::createUniformBuffers() {
 }
 
 void Renderer::createDescriptorPool() {
-  std::array poolSize = {
-    vk::DescriptorPoolSize(vk::DescriptorType::eUniformBuffer, MAX_FRAMES_IN_FLIGHT),
-    vk::DescriptorPoolSize(vk::DescriptorType::eCombinedImageSampler, MAX_FRAMES_IN_FLIGHT),
-    vk::DescriptorPoolSize(vk::DescriptorType::eStorageBuffer, MAX_FRAMES_IN_FLIGHT),
-  };
-  vk::DescriptorPoolCreateInfo poolInfo{
-    .flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
+  mDescriptorPool = mvk::DescriptorPool(mvk::DescriptorPool::CreateInfo{
+    .device = mDevice.device,
     .maxSets = MAX_FRAMES_IN_FLIGHT,
-    .poolSizeCount = poolSize.size(),
-    .pPoolSizes = poolSize.data(),
-  };
-  mDescriptorPool = vk::raii::DescriptorPool(mDevice.device, poolInfo);
+    .resourceSizes =
+      {
+        {vk::DescriptorType::eUniformBuffer, MAX_FRAMES_IN_FLIGHT},
+        {vk::DescriptorType::eCombinedImageSampler, MAX_FRAMES_IN_FLIGHT},
+        {vk::DescriptorType::eStorageBuffer, MAX_FRAMES_IN_FLIGHT},
+      },
+    .freeDescriptorSet = true,
+  });
 }
 
 void Renderer::createDescriptorSets() {
-  std::vector<vk::DescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, *mDescriptorSetLayout);
-  vk::DescriptorSetAllocateInfo allocInfo{
-    .descriptorPool = mDescriptorPool,
-    .descriptorSetCount = static_cast<uint32_t>(layouts.size()),
-    .pSetLayouts = layouts.data(),
-  };
+  mDescriptorSets = mvk::DescriptorSets(mvk::DescriptorSets::CreateInfo{
+    .device = mDevice.device,
+    .pool = mDescriptorPool.pool,
+    .count = MAX_FRAMES_IN_FLIGHT,
+    .description =
+      {
+        mvk::DescriptorSets::Layout{
+          .bindingSlot = 0, .type = mvk::DescriptorSets::Type::Uniform, .arrayCount = 1, .usedStages = vk::ShaderStageFlagBits::eVertex},
+        mvk::DescriptorSets::Layout{.bindingSlot = 1,
+                                    .type = mvk::DescriptorSets::Type::CombinedImageSampler,
+                                    .arrayCount = 1,
+                                    .usedStages = vk::ShaderStageFlagBits::eFragment},
+        mvk::DescriptorSets::Layout{
+          .bindingSlot = 2, .type = mvk::DescriptorSets::Type::SSBO, .arrayCount = 1, .usedStages = vk::ShaderStageFlagBits::eVertex},
+      },
+  });
 
-  mDescriptorSets = vk::raii::DescriptorSets(mDevice.device, allocInfo);
-  for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-    vk::DescriptorBufferInfo bufferInfo{.buffer = mUniformBuffers[i].buffer, .offset = 0, .range = sizeof(UniformBufferObject)};
-    vk::DescriptorBufferInfo ssboInfo{.buffer = mInstanceDataSSBOs[i].buffer, .offset = 0, .range = sizeof(glm::mat4) * numInstances};
+  for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+    vk::DescriptorBufferInfo uniformBufferInfo{.buffer = mUniformBuffers[i].buffer, .offset = 0, .range = sizeof(UniformBufferObject)};
+    vk::DescriptorBufferInfo instanceDataBufInfo{.buffer = mInstanceDataSSBOs[i].buffer, .offset = 0, .range = sizeof(glm::mat4) * numInstances};
 
     vk::DescriptorImageInfo imageInfo{
       .sampler = mSampler.sampler,
@@ -409,34 +369,12 @@ void Renderer::createDescriptorSets() {
       .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
     };
 
-    std::array descriptorWrites = {
-      vk::WriteDescriptorSet{
-        .dstSet = mDescriptorSets[i],
-        .dstBinding = 0,
-        .dstArrayElement = 0,
-        .descriptorCount = 1,
-        .descriptorType = vk::DescriptorType::eUniformBuffer,
-        .pBufferInfo = &bufferInfo,
-      },
-      vk::WriteDescriptorSet{
-        .dstSet = mDescriptorSets[i],
-        .dstBinding = 1,
-        .dstArrayElement = 0,
-        .descriptorCount = 1,
-        .descriptorType = vk::DescriptorType::eCombinedImageSampler,
-        .pImageInfo = &imageInfo,
-      },
-      vk::WriteDescriptorSet{
-        .dstSet = mDescriptorSets[i],
-        .dstBinding = 2,
-        .dstArrayElement = 0,
-        .descriptorCount = 1,
-        .descriptorType = vk::DescriptorType::eStorageBuffer,
-        .pBufferInfo = &ssboInfo,
-      },
-    };
-
-    mDevice.device.updateDescriptorSets(descriptorWrites, {});
+    mDescriptorSets.UpdateDescriptorSets(mDevice.device,
+                                         {
+                                           mvk::DescriptorSets::UpdateData{i, 0, 0, 1, &uniformBufferInfo, nullptr},
+                                           mvk::DescriptorSets::UpdateData{i, 1, 0, 1, nullptr, &imageInfo},
+                                           mvk::DescriptorSets::UpdateData{i, 2, 0, 1, &instanceDataBufInfo, nullptr},
+                                         });
   }
 }
 
@@ -447,26 +385,26 @@ void Renderer::recordCommandBuffer(uint32_t imageIdx) {
   cmd.begin({});
 
   // Color attachment transition
-  transition_image_layout(swapchainImg,
-                          cmd,
-                          vk::ImageLayout::eUndefined,
-                          vk::ImageLayout::eColorAttachmentOptimal,
-                          {},
-                          vk::AccessFlagBits2::eColorAttachmentWrite,
-                          vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-                          vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-                          vk::ImageAspectFlagBits::eColor);
+  vkh::transition_image_layout(swapchainImg,
+                               cmd,
+                               vk::ImageLayout::eUndefined,
+                               vk::ImageLayout::eColorAttachmentOptimal,
+                               {},
+                               vk::AccessFlagBits2::eColorAttachmentWrite,
+                               vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+                               vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+                               vk::ImageAspectFlagBits::eColor);
 
   // Depth attachment transition
-  transition_image_layout(mSwapChain.depthTexture.image.image,
-                          cmd,
-                          vk::ImageLayout::eUndefined,
-                          vk::ImageLayout::eDepthStencilAttachmentOptimal,
-                          vk::AccessFlagBits2::eDepthStencilAttachmentRead,
-                          vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
-                          vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
-                          vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
-                          vk::ImageAspectFlagBits::eDepth);
+  vkh::transition_image_layout(mSwapChain.depthTexture.image.image,
+                               cmd,
+                               vk::ImageLayout::eUndefined,
+                               vk::ImageLayout::eDepthStencilAttachmentOptimal,
+                               vk::AccessFlagBits2::eDepthStencilAttachmentRead,
+                               vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
+                               vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
+                               vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
+                               vk::ImageAspectFlagBits::eDepth);
 
   vk::ClearValue clearColor = vk::ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f);
   vk::ClearValue clearDepth = vk::ClearDepthStencilValue(1.0f, 0);
@@ -503,20 +441,20 @@ void Renderer::recordCommandBuffer(uint32_t imageIdx) {
 
   cmd.bindVertexBuffers(0, {mMeshBuffer.buffer}, {0});
   cmd.bindIndexBuffer(mMeshBuffer.buffer, mMesh.GetVerticesSizeBytes(), mMesh.GetVkIndexType());
-  cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, mPipeline.GetLayout(), 0, *mDescriptorSets[mFrameIdx], nullptr);
+  cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, mPipeline.GetLayout(), 0, *mDescriptorSets.sets[mFrameIdx], nullptr);
   cmd.drawIndexed(mMesh.indices.size(), numInstances, 0, 0, 0);
 
   cmd.endRendering();
 
-  transition_image_layout(swapchainImg,
-                          cmd,
-                          vk::ImageLayout::eColorAttachmentOptimal,
-                          vk::ImageLayout::ePresentSrcKHR,
-                          vk::AccessFlagBits2::eColorAttachmentWrite,
-                          {},
-                          vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-                          vk::PipelineStageFlagBits2::eBottomOfPipe,
-                          vk::ImageAspectFlagBits::eColor);
+  vkh::transition_image_layout(swapchainImg,
+                               cmd,
+                               vk::ImageLayout::eColorAttachmentOptimal,
+                               vk::ImageLayout::ePresentSrcKHR,
+                               vk::AccessFlagBits2::eColorAttachmentWrite,
+                               {},
+                               vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+                               vk::PipelineStageFlagBits2::eBottomOfPipe,
+                               vk::ImageAspectFlagBits::eColor);
   cmd.end();
 }
 

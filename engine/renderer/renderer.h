@@ -3,6 +3,8 @@
 #include <functional>
 #include <glm/glm.hpp>
 
+#include "engine/renderer/mvk/mvk_descriptor_pool.h"
+#include "engine/renderer/mvk/mvk_descriptor_sets.h"
 #include "engine/renderer/mvk/mvk_pipeline.h"
 #include "engine/renderer/vk_logical_device.h"
 #include "engine/renderer/vk_physical_device.h"
@@ -71,9 +73,8 @@ class Renderer {
   VulkanSwapChain mSwapChain;
 
   mvk::Pipeline mPipeline;
-  vk::raii::DescriptorSetLayout mDescriptorSetLayout = nullptr;
-  vk::raii::DescriptorPool mDescriptorPool = nullptr;
-  std::vector<vk::raii::DescriptorSet> mDescriptorSets;
+  mvk::DescriptorPool mDescriptorPool;
+  mvk::DescriptorSets mDescriptorSets;
 
   struct CommandPools {
     vk::raii::CommandPool graphics = nullptr;
@@ -101,7 +102,6 @@ class Renderer {
   VulkanTexture mTexture;
   VulkanSampler mSampler;
 
-  void createDescriptorSetLayout();
   void createCommandPools();
   void createUniformBuffers();
   void createDescriptorPool();
