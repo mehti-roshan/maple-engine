@@ -5,13 +5,17 @@
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
+#include <glm/geometric.hpp>
+#include <glm/trigonometric.hpp>
 #include <unordered_map>
 #include <vector>
+#include <vulkan/vulkan_enums.hpp>
 
+#include "engine/renderer/mvk/mvk_pipeline.h"
 #include "engine/renderer/vk_buffer.h"
 #include "engine/renderer/vk_device_features.h"
-#include "engine/renderer/vk_graphics_pipeline.h"
 #include "engine/renderer/vk_instance_ctx.h"
 #include "engine/renderer/vk_logical_device.h"
 #include "engine/renderer/vk_sampler.h"
@@ -38,6 +42,8 @@ constexpr bool debug = false;
 constexpr bool debug = true;
 #endif
 
+size_t numInstances = 10;
+
 void transition_image_layout(vk::Image image,
                              vk::CommandBuffer commandBuffer,
                              vk::ImageLayout oldLayout,
@@ -63,7 +69,7 @@ void transition_image_layout(vk::Image image,
 }
 
 struct UniformBufferObject {
-  glm::mat4 model;
+  // glm::mat4 model;
   glm::mat4 view;
   glm::mat4 proj;
 };
@@ -99,10 +105,15 @@ void Renderer::Init(const std::vector<const char*>& glfwExtensions, SurfaceCreat
                                 .memoryManager = mMemoryManager,
                                 .framebufferSizeCb = mFrameBufferSizeCallback});
   createDescriptorSetLayout();
-  mGraphicsPipeline = VulkanGraphicsPipeline(VulkanGraphicsPipeline::CreateInfo{
+  mPipeline = mvk::Pipeline(mvk::Pipeline::CreateInfo{
     .shaderFile = "assets/shaders/slang.spv",
-    .device = mDevice,
-    .swapchain = mSwapChain,
+    .device = mDevice.device,
+    .swapChainData =
+      {
+        .swapchain = mSwapChain.swapchain,
+        .format = mSwapChain.format,
+        .depthFormat = mSwapChain.depthFormat,
+      },
     .descriptorSetLayout = mDescriptorSetLayout,
     .vertexLayoutDescription =
       {
@@ -155,11 +166,13 @@ void Renderer::DrawFrame() {
 
   if (presentResult == vk::Result::eErrorOutOfDateKHR || presentResult == vk::Result::eSuboptimalKHR || mFrameBufferResized) {
     mFrameBufferResized = false;
-    mSwapChain.ReCreate({.physicalDevice = mPhysicalDevice,
-                         .device = mDevice,
-                         .surface = mSurface,
-                         .memoryManager = mMemoryManager,
-                         .framebufferSizeCb = mFrameBufferSizeCallback});
+    mSwapChain.ReCreate({
+      .physicalDevice = mPhysicalDevice,
+      .device = mDevice,
+      .surface = mSurface,
+      .memoryManager = mMemoryManager,
+      .framebufferSizeCb = mFrameBufferSizeCallback,
+    });
   } else if (presentResult != vk::Result::eSuccess) {
     MAPLE_FATAL("Failed to present swap chain image");
   }
@@ -174,13 +187,28 @@ void Renderer::updateUniformBuffer(uint32_t currentImage) {
   float time = std::chrono::duration<float, std::chrono::seconds::period>(currentTime - startTime).count();
 
   UniformBufferObject ubo{
-    .model = glm::rotate(glm::mat4(1.0f), time * glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f)),
     .view = glm::lookAt(glm::vec3(2.0f), glm::vec3(0.0f), glm::vec3(0.0f, 0.0f, 1.0f)),
     .proj = glm::perspective(
-      glm::radians(45.0f), static_cast<float>(mSwapChain.extent.width) / static_cast<float>(mSwapChain.extent.height), 0.1f, 2000.0f)};
+      glm::radians(45.0f), static_cast<float>(mSwapChain.extent.width) / static_cast<float>(mSwapChain.extent.height), 0.1f, 2000.0f),
+  };
   ubo.proj[1][1] *= -1;  // Invert Y for Vulkan
 
   mUniformBuffers[currentImage].Upload(&ubo, sizeof(ubo));
+
+  std::vector<glm::mat4> modelMatrices(numInstances, glm::mat4(1.0f));
+  for (auto& mat : modelMatrices) {
+    float amount = 5.0f;
+    mat = glm::translate(mat,
+                         glm::vec3(float(rand()) / float(RAND_MAX) * amount - (amount / 2.0f),
+                                   float(rand()) / float(RAND_MAX) * amount - (amount / 2.0f),
+                                   float(rand()) / float(RAND_MAX) * amount - (amount / 2.0f)));
+
+    float deg = float(rand()) / float(RAND_MAX) * 360.0f;
+    glm::vec3 axis = glm::normalize(glm::vec3(float(rand()) / float(RAND_MAX), float(rand()) / float(RAND_MAX), float(rand()) / float(RAND_MAX)));
+    mat = glm::rotate(mat, glm::radians(deg), axis);
+  }
+
+  mInstanceDataSSBOs[currentImage].Upload(modelMatrices.data(), modelMatrices.size() * sizeof(decltype(modelMatrices)::value_type));
 }
 
 void Renderer::createDescriptorSetLayout() {
@@ -196,6 +224,12 @@ void Renderer::createDescriptorSetLayout() {
       .descriptorType = vk::DescriptorType::eCombinedImageSampler,
       .descriptorCount = 1,
       .stageFlags = vk::ShaderStageFlagBits::eFragment,
+    },
+    vk::DescriptorSetLayoutBinding{
+      .binding = 2,
+      .descriptorType = vk::DescriptorType::eStorageBuffer,
+      .descriptorCount = 1,
+      .stageFlags = vk::ShaderStageFlagBits::eVertex,
     },
   };
 
@@ -329,27 +363,46 @@ void Renderer::createUniformBuffers() {
                                                           VMA_MEMORY_USAGE_AUTO,
                                                           VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT));
   }
+
+  mInstanceDataSSBOs.clear();
+  vk::DeviceSize bufSize = sizeof(glm::mat4) * numInstances;
+  for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+    mInstanceDataSSBOs.push_back(
+      mMemoryManager.createBuffer(bufSize,
+                                  vk::BufferUsageFlagBits::eStorageBuffer,
+                                  VMA_MEMORY_USAGE_AUTO,
+                                  VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT));
+  }
 }
 
 void Renderer::createDescriptorPool() {
   std::array poolSize = {
     vk::DescriptorPoolSize(vk::DescriptorType::eUniformBuffer, MAX_FRAMES_IN_FLIGHT),
     vk::DescriptorPoolSize(vk::DescriptorType::eCombinedImageSampler, MAX_FRAMES_IN_FLIGHT),
+    vk::DescriptorPoolSize(vk::DescriptorType::eStorageBuffer, MAX_FRAMES_IN_FLIGHT),
   };
-  vk::DescriptorPoolCreateInfo poolInfo{.flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
-                                        .maxSets = MAX_FRAMES_IN_FLIGHT,
-                                        .poolSizeCount = poolSize.size(),
-                                        .pPoolSizes = poolSize.data()};
+  vk::DescriptorPoolCreateInfo poolInfo{
+    .flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
+    .maxSets = MAX_FRAMES_IN_FLIGHT,
+    .poolSizeCount = poolSize.size(),
+    .pPoolSizes = poolSize.data(),
+  };
   mDescriptorPool = vk::raii::DescriptorPool(mDevice.device, poolInfo);
 }
 
 void Renderer::createDescriptorSets() {
   std::vector<vk::DescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, *mDescriptorSetLayout);
   vk::DescriptorSetAllocateInfo allocInfo{
-    .descriptorPool = mDescriptorPool, .descriptorSetCount = static_cast<uint32_t>(layouts.size()), .pSetLayouts = layouts.data()};
+    .descriptorPool = mDescriptorPool,
+    .descriptorSetCount = static_cast<uint32_t>(layouts.size()),
+    .pSetLayouts = layouts.data(),
+  };
+
   mDescriptorSets = vk::raii::DescriptorSets(mDevice.device, allocInfo);
   for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
     vk::DescriptorBufferInfo bufferInfo{.buffer = mUniformBuffers[i].buffer, .offset = 0, .range = sizeof(UniformBufferObject)};
+    vk::DescriptorBufferInfo ssboInfo{.buffer = mInstanceDataSSBOs[i].buffer, .offset = 0, .range = sizeof(glm::mat4) * numInstances};
+
     vk::DescriptorImageInfo imageInfo{
       .sampler = mSampler.sampler,
       .imageView = mTexture.view,
@@ -372,6 +425,14 @@ void Renderer::createDescriptorSets() {
         .descriptorCount = 1,
         .descriptorType = vk::DescriptorType::eCombinedImageSampler,
         .pImageInfo = &imageInfo,
+      },
+      vk::WriteDescriptorSet{
+        .dstSet = mDescriptorSets[i],
+        .dstBinding = 2,
+        .dstArrayElement = 0,
+        .descriptorCount = 1,
+        .descriptorType = vk::DescriptorType::eStorageBuffer,
+        .pBufferInfo = &ssboInfo,
       },
     };
 
@@ -435,16 +496,15 @@ void Renderer::recordCommandBuffer(uint32_t imageIdx) {
 
   cmd.beginRendering(renderingInfo);
 
-  cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, mGraphicsPipeline.pipeline);
+  cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, mPipeline.GetPipeline());
 
-  cmd.setViewport(
-    0, vk::Viewport{0.0f, 0.0f, static_cast<float>(mSwapChain.extent.width), static_cast<float>(mSwapChain.extent.height), 0.0f, 1.0f});
+  cmd.setViewport(0, vk::Viewport{0.0f, 0.0f, static_cast<float>(mSwapChain.extent.width), static_cast<float>(mSwapChain.extent.height), 0.0f, 1.0f});
   cmd.setScissor(0, vk::Rect2D(vk::Offset2D(0, 0), mSwapChain.extent));
 
   cmd.bindVertexBuffers(0, {mMeshBuffer.buffer}, {0});
   cmd.bindIndexBuffer(mMeshBuffer.buffer, mMesh.GetVerticesSizeBytes(), mMesh.GetVkIndexType());
-  cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, mGraphicsPipeline.layout, 0, *mDescriptorSets[mFrameIdx], nullptr);
-  cmd.drawIndexed(mMesh.indices.size(), 1, 0, 0, 0);
+  cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, mPipeline.GetLayout(), 0, *mDescriptorSets[mFrameIdx], nullptr);
+  cmd.drawIndexed(mMesh.indices.size(), numInstances, 0, 0, 0);
 
   cmd.endRendering();
 

@@ -5,7 +5,7 @@
 #include "engine/renderer/vk_buffer.h"
 #include "log_macros.h"
 
-#define VULKAN_HPP_NO_STRUCT_CONSTRUCTORS
+
 #include <vulkan/vulkan_raii.hpp>
 
 // RAII wrapper for a VMA-managed Vulkan image

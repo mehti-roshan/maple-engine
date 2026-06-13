@@ -1,20 +1,12 @@
 #pragma once
-
 #include <engine/file/file.h>
 
 #include <cstdint>
-
-#include "engine/renderer/vk_swapchain.h"
-#include "vk_logical_device.h"
-
-#define VULKAN_HPP_NO_STRUCT_CONSTRUCTORS
 #include <vulkan/vulkan_raii.hpp>
 
-namespace maple {
-struct VulkanGraphicsPipeline {
-  vk::raii::PipelineLayout layout;
-  vk::raii::Pipeline pipeline;
-
+namespace mvk {
+class Pipeline {
+ public:
   struct VertexBindingLayout {
     vk::VertexInputBindingDescription binding;
   };
@@ -28,18 +20,25 @@ struct VulkanGraphicsPipeline {
     VertexAttributeLayout attributes;
   };
 
+  struct SwapChainData {
+    vk::raii::SwapchainKHR& swapchain;
+    vk::SurfaceFormatKHR format;
+    vk::Format depthFormat;
+  };
+
   struct CreateInfo {
     const std::string& shaderFile;
-    const VulkanLogicalDevice& device;
-    const VulkanSwapChain& swapchain;
+    const vk::raii::Device& device;
+    const SwapChainData& swapChainData;
+
     const vk::raii::DescriptorSetLayout& descriptorSetLayout;
     const VertexLayoutDescription& vertexLayoutDescription;
   };
 
-  VulkanGraphicsPipeline() : layout(nullptr), pipeline(nullptr) {};
+  Pipeline() : layout(nullptr), pipeline(nullptr) {};
 
-  VulkanGraphicsPipeline(const CreateInfo& info) : layout(nullptr), pipeline(nullptr) {
-    auto shaderModule = createShaderModule(info.device, file::ReadFile(info.shaderFile));
+  Pipeline(const CreateInfo& info) : layout(nullptr), pipeline(nullptr) {
+    auto shaderModule = createShaderModule(info.device, maple::file::ReadFile(info.shaderFile));
 
     vk::PipelineShaderStageCreateInfo vertShaderStageInfo{.stage = vk::ShaderStageFlagBits::eVertex, .module = shaderModule, .pName = "vertMain"};
     vk::PipelineShaderStageCreateInfo fragShaderStageInfo{.stage = vk::ShaderStageFlagBits::eFragment, .module = shaderModule, .pName = "fragMain"};
@@ -52,11 +51,9 @@ struct VulkanGraphicsPipeline {
       .pDynamicStates = dynamicStates.data(),
     };
 
-    // auto bindingDescription = mMesh.GetBindingDescription();
     auto bindingDescription = info.vertexLayoutDescription.binding.binding;
-    // auto attributeDescriptions = mMesh.GetAttributeDescriptions();
     auto attributeDescriptions = info.vertexLayoutDescription.attributes.attributes;
-    
+
     vk::PipelineVertexInputStateCreateInfo vertexInputInfo{
       .vertexBindingDescriptionCount = 1,
       .pVertexBindingDescriptions = &bindingDescription,
@@ -66,13 +63,9 @@ struct VulkanGraphicsPipeline {
 
     vk::PipelineInputAssemblyStateCreateInfo inputAssembly{.topology = vk::PrimitiveTopology::eTriangleList};
 
-    vk::Viewport viewport{0.0f, 0.0f, static_cast<float>(info.swapchain.extent.width), static_cast<float>(info.swapchain.extent.height), 0.0f, 1.0f};
-    vk::Rect2D scissor{{0, 0}, info.swapchain.extent};
     vk::PipelineViewportStateCreateInfo viewportState{
       .viewportCount = 1,
-      .pViewports = &viewport,
       .scissorCount = 1,
-      .pScissors = &scissor,
     };
 
     vk::PipelineRasterizationStateCreateInfo rasterizer{
@@ -106,10 +99,10 @@ struct VulkanGraphicsPipeline {
       .logicOpEnable = vk::False, .logicOp = vk::LogicOp::eCopy, .attachmentCount = 1, .pAttachments = &colorBlendAttachment};
 
     vk::PipelineLayoutCreateInfo pipelineLayoutInfo{.setLayoutCount = 1, .pSetLayouts = &*info.descriptorSetLayout, .pushConstantRangeCount = 0};
-    layout = vk::raii::PipelineLayout(info.device.device, pipelineLayoutInfo);
+    layout = vk::raii::PipelineLayout(info.device, pipelineLayoutInfo);
 
     vk::PipelineRenderingCreateInfo pipelineRenderingCreateInfo{
-      .colorAttachmentCount = 1, .pColorAttachmentFormats = &info.swapchain.format.format, .depthAttachmentFormat = info.swapchain.depthFormat};
+      .colorAttachmentCount = 1, .pColorAttachmentFormats = &info.swapChainData.format.format, .depthAttachmentFormat = info.swapChainData.depthFormat};
     vk::GraphicsPipelineCreateInfo pipelineInfo{
       .pNext = &pipelineRenderingCreateInfo,
       .stageCount = 2,
@@ -126,18 +119,25 @@ struct VulkanGraphicsPipeline {
       .renderPass = nullptr,
     };
 
-    pipeline = vk::raii::Pipeline(info.device.device, nullptr, pipelineInfo);
+    pipeline = vk::raii::Pipeline(info.device, nullptr, pipelineInfo);
   };
 
+  auto& GetPipeline() { return pipeline; }
+  auto& GetLayout() { return layout; }
+
  private:
+  vk::raii::Pipeline pipeline;
+  vk::raii::PipelineLayout layout;
+
   [[nodiscard]]
-  static vk::raii::ShaderModule createShaderModule(const VulkanLogicalDevice& device, const std::vector<char>& code) {
+  static vk::raii::ShaderModule createShaderModule(const vk::raii::Device& device, const std::vector<char>& code) {
     vk::ShaderModuleCreateInfo createInfo{
       .codeSize = code.size(),
       .pCode = reinterpret_cast<const uint32_t*>(code.data()),
     };
 
-    return vk::raii::ShaderModule(device.device, createInfo);
+    return vk::raii::ShaderModule(device, createInfo);
   }
 };
-};  // namespace maple
+
+}  // namespace mvk

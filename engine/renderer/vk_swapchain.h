@@ -6,7 +6,6 @@
 #include "vk_logical_device.h"
 #include "vk_physical_device.h"
 
-#define VULKAN_HPP_NO_STRUCT_CONSTRUCTORS
 #include <vulkan/vulkan_raii.hpp>
 
 namespace maple {

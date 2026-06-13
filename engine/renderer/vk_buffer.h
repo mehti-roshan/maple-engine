@@ -3,7 +3,7 @@
 #include <engine/third_party/vma/vk_mem_alloc.h>
 
 #include "log_macros.h"
-#define VULKAN_HPP_NO_STRUCT_CONSTRUCTORS
+
 #include <vulkan/vulkan_raii.hpp>
 
 // Simple RAII wrapper for VMA-managed Vulkan buffers

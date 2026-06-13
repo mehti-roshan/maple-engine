@@ -4,7 +4,6 @@
 
 #include <vector>
 
-#define VULKAN_HPP_NO_STRUCT_CONSTRUCTORS
 #include <vulkan/vulkan_raii.hpp>
 
 namespace maple {
@@ -43,7 +42,7 @@ struct VulkanInstanceContext {
       .ppEnabledLayerNames = requiredLayers.data(),
       .enabledExtensionCount = static_cast<uint32_t>(requiredExtensions.size()),
       .ppEnabledExtensionNames = requiredExtensions.data(),
-    };
+    }; 
 
     mInstance = vk::raii::Instance(mContext, createInfo);
 

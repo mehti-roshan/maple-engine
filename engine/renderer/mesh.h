@@ -2,7 +2,7 @@
 #include <type_traits>
 #include <vector>
 
-#define VULKAN_HPP_NO_STRUCT_CONSTRUCTORS
+
 #include <vulkan/vulkan_raii.hpp>
 
 template <typename T>

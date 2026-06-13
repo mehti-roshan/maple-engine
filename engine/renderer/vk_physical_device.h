@@ -1,13 +1,13 @@
 #pragma once
 
 #include <engine/logging/log_macros.h>
+#include <vulkan/vulkan_core.h>
 
 #include <cstdint>
 #include <cstring>
 #include <map>
 #include <vector>
 
-#define VULKAN_HPP_NO_STRUCT_CONSTRUCTORS
 #include <vulkan/vulkan_raii.hpp>
 
 #include "vk_device_features.h"
