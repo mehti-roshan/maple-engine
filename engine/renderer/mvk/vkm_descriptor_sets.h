@@ -8,7 +8,7 @@
 
 #include "log_macros.h"
 
-namespace mvk {
+namespace vkm {
 struct DescriptorSets {
   enum Type {
     Uniform,
@@ -103,4 +103,4 @@ struct DescriptorSets {
   }
 };
 
-}  // namespace mvk
+}  // namespace vkm

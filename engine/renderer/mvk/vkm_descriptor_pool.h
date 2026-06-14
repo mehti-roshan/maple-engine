@@ -4,7 +4,7 @@
 #include <vector>
 #include <vulkan/vulkan_raii.hpp>
 
-namespace mvk {
+namespace vkm {
 struct DescriptorPool {
   vk::raii::DescriptorPool pool;
 
@@ -33,4 +33,4 @@ struct DescriptorPool {
   }
 };
 
-}  // namespace mvk
+}  // namespace vkm

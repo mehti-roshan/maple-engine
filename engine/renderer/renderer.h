@@ -3,9 +3,9 @@
 #include <functional>
 #include <glm/glm.hpp>
 
-#include "engine/renderer/mvk/mvk_descriptor_pool.h"
-#include "engine/renderer/mvk/mvk_descriptor_sets.h"
-#include "engine/renderer/mvk/mvk_pipeline.h"
+#include "engine/renderer/vkm/vkm_descriptor_pool.h"
+#include "engine/renderer/vkm/vkm_descriptor_sets.h"
+#include "engine/renderer/vkm/vkm_pipeline.h"
 #include "engine/renderer/vk_logical_device.h"
 #include "engine/renderer/vk_physical_device.h"
 #include "engine/renderer/vk_swapchain.h"
@@ -72,9 +72,9 @@ class Renderer {
   VulkanMemoryManager mMemoryManager;
   VulkanSwapChain mSwapChain;
 
-  mvk::Pipeline mPipeline;
-  mvk::DescriptorPool mDescriptorPool;
-  mvk::DescriptorSets mDescriptorSets;
+  vkm::Pipeline mPipeline;
+  vkm::DescriptorPool mDescriptorPool;
+  vkm::DescriptorSets mDescriptorSets;
 
   struct CommandPools {
     vk::raii::CommandPool graphics = nullptr;

@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <vulkan/vulkan_raii.hpp>
 
-namespace mvk {
+namespace vkm {
 class Pipeline {
  public:
   struct VertexBindingLayout {
@@ -140,4 +140,4 @@ class Pipeline {
   }
 };
 
-}  // namespace mvk
+}  // namespace vkm

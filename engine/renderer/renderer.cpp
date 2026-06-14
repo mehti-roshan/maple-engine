@@ -13,9 +13,9 @@
 #include <vector>
 #include <vulkan/vulkan_enums.hpp>
 
-#include "engine/renderer/mvk/mvk_descriptor_pool.h"
-#include "engine/renderer/mvk/mvk_descriptor_sets.h"
-#include "engine/renderer/mvk/mvk_pipeline.h"
+#include "engine/renderer/vkm/vkm_descriptor_pool.h"
+#include "engine/renderer/vkm/vkm_descriptor_sets.h"
+#include "engine/renderer/vkm/vkm_pipeline.h"
 #include "engine/renderer/vk_buffer.h"
 #include "engine/renderer/vk_device_features.h"
 #include "engine/renderer/vk_instance_ctx.h"
@@ -91,7 +91,7 @@ void Renderer::Init(const std::vector<const char*>& glfwExtensions, SurfaceCreat
   createTextureSampler();
   createDescriptorPool();
   createDescriptorSets();
-  mPipeline = mvk::Pipeline(mvk::Pipeline::CreateInfo{
+  mPipeline = vkm::Pipeline(vkm::Pipeline::CreateInfo{
     .shaderFile = "assets/shaders/slang.spv",
     .device = mDevice.device,
     .swapChainData =
@@ -220,7 +220,7 @@ void Renderer::createTexture() {
 
   mTexture = mMemoryManager.createTexture({static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight), 1},
                                           vk::Format::eR8G8B8A8Srgb,
-                                          vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
+                                        vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
                                           vk::ImageAspectFlagBits::eColor);
 
   auto cmd = beginSingleTimeCommands();
@@ -328,7 +328,7 @@ void Renderer::createUniformBuffers() {
 }
 
 void Renderer::createDescriptorPool() {
-  mDescriptorPool = mvk::DescriptorPool(mvk::DescriptorPool::CreateInfo{
+  mDescriptorPool = vkm::DescriptorPool(vkm::DescriptorPool::CreateInfo{
     .device = mDevice.device,
     .maxSets = MAX_FRAMES_IN_FLIGHT,
     .resourceSizes =
@@ -342,20 +342,20 @@ void Renderer::createDescriptorPool() {
 }
 
 void Renderer::createDescriptorSets() {
-  mDescriptorSets = mvk::DescriptorSets(mvk::DescriptorSets::CreateInfo{
+  mDescriptorSets = vkm::DescriptorSets(vkm::DescriptorSets::CreateInfo{
     .device = mDevice.device,
     .pool = mDescriptorPool.pool,
     .count = MAX_FRAMES_IN_FLIGHT,
     .description =
       {
-        mvk::DescriptorSets::Layout{
-          .bindingSlot = 0, .type = mvk::DescriptorSets::Type::Uniform, .arrayCount = 1, .usedStages = vk::ShaderStageFlagBits::eVertex},
-        mvk::DescriptorSets::Layout{.bindingSlot = 1,
-                                    .type = mvk::DescriptorSets::Type::CombinedImageSampler,
+        vkm::DescriptorSets::Layout{
+          .bindingSlot = 0, .type = vkm::DescriptorSets::Type::Uniform, .arrayCount = 1, .usedStages = vk::ShaderStageFlagBits::eVertex},
+        vkm::DescriptorSets::Layout{.bindingSlot = 1,
+                                    .type = vkm::DescriptorSets::Type::CombinedImageSampler,
                                     .arrayCount = 1,
                                     .usedStages = vk::ShaderStageFlagBits::eFragment},
-        mvk::DescriptorSets::Layout{
-          .bindingSlot = 2, .type = mvk::DescriptorSets::Type::SSBO, .arrayCount = 1, .usedStages = vk::ShaderStageFlagBits::eVertex},
+        vkm::DescriptorSets::Layout{
+          .bindingSlot = 2, .type = vkm::DescriptorSets::Type::SSBO, .arrayCount = 1, .usedStages = vk::ShaderStageFlagBits::eVertex},
       },
   });
 
@@ -371,9 +371,9 @@ void Renderer::createDescriptorSets() {
 
     mDescriptorSets.UpdateDescriptorSets(mDevice.device,
                                          {
-                                           mvk::DescriptorSets::UpdateData{i, 0, 0, 1, &uniformBufferInfo, nullptr},
-                                           mvk::DescriptorSets::UpdateData{i, 1, 0, 1, nullptr, &imageInfo},
-                                           mvk::DescriptorSets::UpdateData{i, 2, 0, 1, &instanceDataBufInfo, nullptr},
+                                           vkm::DescriptorSets::UpdateData{i, 0, 0, 1, &uniformBufferInfo, nullptr},
+                                           vkm::DescriptorSets::UpdateData{i, 1, 0, 1, nullptr, &imageInfo},
+                                           vkm::DescriptorSets::UpdateData{i, 2, 0, 1, &instanceDataBufInfo, nullptr},
                                          });
   }
 }
