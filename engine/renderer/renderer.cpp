@@ -35,7 +35,7 @@
 #include <engine/third_party/tiny_obj_loader.h>
 
 #include "vk_physical_device.h"
-#include "vkh/transition_image_layout.h"
+#include "vkh/vkh_transition_image_layout.h"
 
 #ifdef NDEBUG
 constexpr bool debug = false;
