@@ -1,8 +1,9 @@
 #pragma once
 
-#include <functional>
 #include <glm/glm.hpp>
 
+#include "engine/renderer/vkm/vkm_mesh.h"
+#include "engine/renderer/vkm/vkm_sampler.h"
 #include "engine/renderer/vkm/vkm_descriptor_pool.h"
 #include "engine/renderer/vkm/vkm_descriptor_sets.h"
 #include "engine/renderer/vkm/vkm_pipeline.h"
@@ -12,41 +13,11 @@
 #define GLM_ENABLE_EXPERIMENTAL
 #include <engine/third_party/vma/vk_mem_alloc.h>
 
-#include <glm/gtx/hash.hpp>
 #include <vector>
 
 #include <vulkan/vulkan_raii.hpp>
 
-#include "engine/renderer/mesh.h"
-#include "engine/renderer/vk_buffer.h"
-#include "engine/renderer/vk_memory_manager.h"
-#include "engine/renderer/vk_sampler.h"
-#include "engine/renderer/vk_texture.h"
 #include "vk_instance_ctx.h"
-
-struct Vertex {
-  glm::vec3 pos;
-  glm::vec3 color;
-  glm::vec2 texCoord;
-
-  static vk::VertexInputBindingDescription getBindingDescription() { return {0, sizeof(Vertex), vk::VertexInputRate::eVertex}; }
-  static std::vector<vk::VertexInputAttributeDescription> getAttributeDescriptions() {
-    return {vk::VertexInputAttributeDescription(0, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, pos)),
-            vk::VertexInputAttributeDescription(1, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, color)),
-            vk::VertexInputAttributeDescription(2, 0, vk::Format::eR32G32Sfloat, offsetof(Vertex, texCoord))};
-  }
-
-  bool operator==(const Vertex& other) const { return pos == other.pos && color == other.color && texCoord == other.texCoord; }
-};
-
-namespace std {
-template <>
-struct hash<Vertex> {
-  size_t operator()(Vertex const& vertex) const {
-    return ((hash<glm::vec3>()(vertex.pos) ^ (hash<glm::vec3>()(vertex.color) << 1)) >> 1) ^ (hash<glm::vec2>()(vertex.texCoord) << 1);
-  }
-};
-}  // namespace std
 
 namespace maple {
 class Renderer {
@@ -93,14 +64,14 @@ class Renderer {
   std::vector<FrameData> mFrameData;
   std::vector<vk::raii::Semaphore> mRenderCompleteSems;
 
-  Mesh<Vertex, uint32_t> mMesh;
+  vkm::Mesh mMesh;
   VulkanBuffer mMeshBuffer;
 
   std::vector<VulkanBuffer> mUniformBuffers;
   std::vector<VulkanBuffer> mInstanceDataSSBOs;
 
   VulkanTexture mTexture;
-  VulkanSampler mSampler;
+  vkm::Sampler mSampler;
 
   void createCommandPools();
   void createUniformBuffers();

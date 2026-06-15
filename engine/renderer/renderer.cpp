@@ -15,13 +15,12 @@
 
 #include "engine/renderer/vkm/vkm_descriptor_pool.h"
 #include "engine/renderer/vkm/vkm_descriptor_sets.h"
+#include "engine/renderer/vkm/vkm_mesh.h"
 #include "engine/renderer/vkm/vkm_pipeline.h"
-#include "engine/renderer/vk_buffer.h"
+#include "engine/renderer/vkm/vkm_sampler.h"
 #include "engine/renderer/vk_device_features.h"
 #include "engine/renderer/vk_instance_ctx.h"
 #include "engine/renderer/vk_logical_device.h"
-#include "engine/renderer/vk_sampler.h"
-#include "engine/renderer/vk_texture.h"
 
 #define GLM_FORCE_RADIANS
 #include <glm/ext/matrix_clip_space.hpp>
@@ -47,7 +46,6 @@ constexpr bool debug = true;
 size_t numInstances = 10;
 
 struct UniformBufferObject {
-  // glm::mat4 model;
   glm::mat4 view;
   glm::mat4 proj;
 };
@@ -82,7 +80,7 @@ void Renderer::Init(const std::vector<const char*>& glfwExtensions, SurfaceCreat
                                 .surface = mSurface,
                                 .memoryManager = mMemoryManager,
                                 .framebufferSizeCb = mFrameBufferSizeCallback});
-  
+
   createCommandPools();
   createFrameData();
   createMeshBuffer();
@@ -103,8 +101,8 @@ void Renderer::Init(const std::vector<const char*>& glfwExtensions, SurfaceCreat
     .descriptorSetLayout = mDescriptorSets.layout,
     .vertexLayoutDescription =
       {
-        mMesh.GetBindingDescription(),
-        mMesh.GetAttributeDescriptions(),
+        vkm::Vertex::GetVertInputBindDesc(),
+        vkm::Vertex::GetVertAttribDescriptions(),
       },
   });
 }
@@ -167,7 +165,7 @@ void Renderer::updateUniformBuffer(uint32_t currentImage) {
   UniformBufferObject ubo{
     .view = glm::lookAt(glm::vec3(2.0f), glm::vec3(0.0f), glm::vec3(0.0f, 0.0f, 1.0f)),
     .proj = glm::perspective(
-      glm::radians(45.0f), static_cast<float>(mSwapChain.extent.width) / static_cast<float>(mSwapChain.extent.height), 0.1f, 2000.0f),
+      glm::radians(70.0f), static_cast<float>(mSwapChain.extent.width) / static_cast<float>(mSwapChain.extent.height), 0.1f, 2000.0f),
   };
   ubo.proj[1][1] *= -1;  // Invert Y for Vulkan
 
@@ -175,15 +173,15 @@ void Renderer::updateUniformBuffer(uint32_t currentImage) {
 
   std::vector<glm::mat4> modelMatrices(numInstances, glm::mat4(1.0f));
   for (auto& mat : modelMatrices) {
-    float amount = 5.0f;
+    float amount = 2.0f;
     mat = glm::translate(mat,
                          glm::vec3(float(rand()) / float(RAND_MAX) * amount - (amount / 2.0f),
                                    float(rand()) / float(RAND_MAX) * amount - (amount / 2.0f),
                                    float(rand()) / float(RAND_MAX) * amount - (amount / 2.0f)));
 
     float deg = float(rand()) / float(RAND_MAX) * 360.0f;
-    glm::vec3 axis = glm::normalize(glm::vec3(float(rand()) / float(RAND_MAX), float(rand()) / float(RAND_MAX), float(rand()) / float(RAND_MAX)));
-    mat = glm::rotate(mat, glm::radians(deg), axis);
+    glm::vec3 axis = glm::normalize(glm::vec3(0, 0, 1.0f));
+    mat = glm::rotate(mat, glm::radians(time * 4.f), axis);
   }
 
   mInstanceDataSSBOs[currentImage].Upload(modelMatrices.data(), modelMatrices.size() * sizeof(decltype(modelMatrices)::value_type));
@@ -220,7 +218,7 @@ void Renderer::createTexture() {
 
   mTexture = mMemoryManager.createTexture({static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight), 1},
                                           vk::Format::eR8G8B8A8Srgb,
-                                        vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
+                                          vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
                                           vk::ImageAspectFlagBits::eColor);
 
   auto cmd = beginSingleTimeCommands();
@@ -231,25 +229,7 @@ void Renderer::createTexture() {
 }
 
 void Renderer::createTextureSampler() {
-  vk::SamplerCreateInfo samplerInfo{
-    .magFilter = vk::Filter::eLinear,
-    .minFilter = vk::Filter::eLinear,
-    .mipmapMode = vk::SamplerMipmapMode::eLinear,
-    .addressModeU = vk::SamplerAddressMode::eRepeat,
-    .addressModeV = vk::SamplerAddressMode::eRepeat,
-    .addressModeW = vk::SamplerAddressMode::eRepeat,
-    .mipLodBias = 0.0f,
-    .anisotropyEnable = vk::True,
-    .maxAnisotropy = mPhysicalDevice.device.getProperties().limits.maxSamplerAnisotropy,
-    .compareEnable = vk::False,
-    .compareOp = vk::CompareOp::eAlways,
-    .minLod = 0.0f,
-    .maxLod = 1.0f,
-    .borderColor = vk::BorderColor::eIntOpaqueBlack,
-    .unnormalizedCoordinates = vk::False,
-  };
-
-  mSampler = VulkanSampler(*mDevice.device, samplerInfo);
+  mSampler = vkm::Sampler(mDevice.device, {.maxAnisotropy = mPhysicalDevice.device.getProperties().limits.maxSamplerAnisotropy});
 }
 
 void Renderer::createMeshBuffer() {
@@ -261,19 +241,18 @@ void Renderer::createMeshBuffer() {
   if (!tinyobj::LoadObj(&attrib, &shapes, &materials, &warn, &err, "assets/models/viking_room.obj"))
     MAPLE_FATAL("Failed to load obj file: {} {}", warn, err);
 
-  std::unordered_map<Vertex, uint32_t> uniqueVerts{};
+  std::unordered_map<vkm::Vertex, uint32_t> uniqueVerts{};
 
   for (const auto& shape : shapes) {
     for (const auto& idx : shape.mesh.indices) {
-      Vertex v{
+      vkm::Vertex v{
         .pos =
           {
             attrib.vertices[3 * idx.vertex_index + 0],
             attrib.vertices[3 * idx.vertex_index + 1],
             attrib.vertices[3 * idx.vertex_index + 2],
           },
-        .color = {1.0f, 1.0f, 1.0f},
-        .texCoord =
+        .uv =
           {
             attrib.texcoords[2 * idx.texcoord_index + 0],
             1.0f - attrib.texcoords[2 * idx.texcoord_index + 1],

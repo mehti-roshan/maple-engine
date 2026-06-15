@@ -1,6 +1,5 @@
 struct VSInput {
   float3 inPosition;
-  float3 inColor;
   float2 inTexCoord;
 };
 
@@ -18,7 +17,6 @@ StructuredBuffer<float4x4> instanceModels;
 
 struct VSOutput {
   float4 pos : SV_Position;
-  float3 color;
   float2 texCoord;
 };
 
@@ -27,7 +25,6 @@ VSOutput vertMain(VSInput input, uint instanceID: SV_InstanceID) {
   VSOutput output;
   float4x4 model = instanceModels[instanceID];
   output.pos = mul(ubo.proj, mul(ubo.view, mul(model, float4(input.inPosition, 1.0))));
-  output.color = input.inColor;
   output.texCoord = input.inTexCoord;
   return output;
 }
