@@ -1,12 +1,12 @@
 #pragma once
 
-#include "engine/renderer/vk_memory_manager.h"
-#include "engine/renderer/vk_texture.h"
+#include <vulkan/vulkan_raii.hpp>
+
+#include "engine/renderer/vkm/vkm_image.h"
 #include "renderer_callbacks.h"
 #include "vk_logical_device.h"
 #include "vk_physical_device.h"
-
-#include <vulkan/vulkan_raii.hpp>
+#include "vkm/vkm_allocator.h"
 
 namespace maple {
 /// \class VulkanSwapChain
@@ -49,14 +49,14 @@ struct VulkanSwapChain {
   std::vector<ImageAndImageView> images;
   vk::SurfaceFormatKHR format;
   vk::Extent2D extent;
-  VulkanTexture depthTexture;
+  vkm::Image depthImage;
   vk::Format depthFormat;
 
   struct CreateInfo {
     const VulkanPhysicalDevice& physicalDevice;
     const VulkanLogicalDevice& device;
     const vk::raii::SurfaceKHR& surface;
-    VulkanMemoryManager& memoryManager;
+    vkm::Allocator& allocator;
     FrameBufferSizeCallback framebufferSizeCb;
   };
 
@@ -141,8 +141,14 @@ struct VulkanSwapChain {
 
     depthFormat = findDepthFormat(info.physicalDevice);
 
-    depthTexture = info.memoryManager.createTexture(
-      {extent.width, extent.height, 1}, depthFormat, vk::ImageUsageFlagBits::eDepthStencilAttachment, vk::ImageAspectFlagBits::eDepth);
+    depthImage = info.allocator.CreateImage({
+      .format = depthFormat,
+      .extent = {extent.width, extent.height, 1},
+      .usage = vk::ImageUsageFlagBits::eDepthStencilAttachment,
+      .aspectMask = vk::ImageAspectFlagBits::eDepth,
+    });
+    // depthTexture = info.memoryManager.createTexture(
+    //   {extent.width, extent.height, 1}, depthFormat, vk::ImageUsageFlagBits::eDepthStencilAttachment, vk::ImageAspectFlagBits::eDepth);
   }
 
   static vk::SurfaceFormatKHR chooseSwapSurfaceFormat(const std::vector<vk::SurfaceFormatKHR>& availableFormats) {

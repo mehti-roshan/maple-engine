@@ -2,6 +2,8 @@
 
 #include <glm/glm.hpp>
 
+#include "engine/renderer/vkm/vkm_allocator.h"
+#include "engine/renderer/vkm/vkm_image.h"
 #include "engine/renderer/vkm/vkm_mesh.h"
 #include "engine/renderer/vkm/vkm_sampler.h"
 #include "engine/renderer/vkm/vkm_descriptor_pool.h"
@@ -11,7 +13,6 @@
 #include "engine/renderer/vk_physical_device.h"
 #include "engine/renderer/vk_swapchain.h"
 #define GLM_ENABLE_EXPERIMENTAL
-#include <engine/third_party/vma/vk_mem_alloc.h>
 
 #include <vector>
 
@@ -40,7 +41,7 @@ class Renderer {
   vk::raii::SurfaceKHR mSurface = nullptr;
   VulkanPhysicalDevice mPhysicalDevice;
   VulkanLogicalDevice mDevice;
-  VulkanMemoryManager mMemoryManager;
+  vkm::Allocator mAllocator;
   VulkanSwapChain mSwapChain;
 
   vkm::Pipeline mPipeline;
@@ -65,12 +66,12 @@ class Renderer {
   std::vector<vk::raii::Semaphore> mRenderCompleteSems;
 
   vkm::Mesh mMesh;
-  VulkanBuffer mMeshBuffer;
+  vkm::Buffer mMeshBuffer;
 
-  std::vector<VulkanBuffer> mUniformBuffers;
-  std::vector<VulkanBuffer> mInstanceDataSSBOs;
+  std::vector<vkm::Buffer> mUniformBuffers;
+  std::vector<vkm::Buffer> mInstanceDataSSBOs;
 
-  VulkanTexture mTexture;
+  vkm::Image mImage;
   vkm::Sampler mSampler;
 
   void createCommandPools();
@@ -88,13 +89,6 @@ class Renderer {
 
   void recordCommandBuffer(uint32_t imageIdx);
   void updateUniformBuffer(uint32_t currentImage);
-
-  void copyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, vk::DeviceSize size) {
-    auto commandCopyBuffer = beginSingleTimeCommands();
-    vk::BufferCopy copyRegion{.srcOffset = 0, .dstOffset = 0, .size = size};
-    commandCopyBuffer.copyBuffer(srcBuffer, dstBuffer, copyRegion);
-    endSingleTimeCommands(commandCopyBuffer);
-  }
 
   [[nodiscard]]
   vk::raii::CommandBuffer beginSingleTimeCommands() {

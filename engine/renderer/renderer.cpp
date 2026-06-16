@@ -13,14 +13,15 @@
 #include <vector>
 #include <vulkan/vulkan_enums.hpp>
 
+#include "engine/renderer/vk_device_features.h"
+#include "engine/renderer/vk_instance_ctx.h"
+#include "engine/renderer/vk_logical_device.h"
+#include "engine/renderer/vkm/vkm_allocator.h"
 #include "engine/renderer/vkm/vkm_descriptor_pool.h"
 #include "engine/renderer/vkm/vkm_descriptor_sets.h"
 #include "engine/renderer/vkm/vkm_mesh.h"
 #include "engine/renderer/vkm/vkm_pipeline.h"
 #include "engine/renderer/vkm/vkm_sampler.h"
-#include "engine/renderer/vk_device_features.h"
-#include "engine/renderer/vk_instance_ctx.h"
-#include "engine/renderer/vk_logical_device.h"
 
 #define GLM_FORCE_RADIANS
 #include <glm/ext/matrix_clip_space.hpp>
@@ -74,11 +75,11 @@ void Renderer::Init(const std::vector<const char*>& glfwExtensions, SurfaceCreat
     .requiredFeatures = requiredFeatures,
   });
 
-  mMemoryManager = VulkanMemoryManager(mInstanceCtx.mInstance, mPhysicalDevice.device, &mDevice.device);
+  mAllocator = vkm::Allocator(mDevice.device, mPhysicalDevice.device);
   mSwapChain = VulkanSwapChain({.physicalDevice = mPhysicalDevice,
                                 .device = mDevice,
                                 .surface = mSurface,
-                                .memoryManager = mMemoryManager,
+                                .allocator = mAllocator,
                                 .framebufferSizeCb = mFrameBufferSizeCallback});
 
   createCommandPools();
@@ -146,7 +147,7 @@ void Renderer::DrawFrame() {
       .physicalDevice = mPhysicalDevice,
       .device = mDevice,
       .surface = mSurface,
-      .memoryManager = mMemoryManager,
+      .allocator = mAllocator,
       .framebufferSizeCb = mFrameBufferSizeCallback,
     });
   } else if (presentResult != vk::Result::eSuccess) {
@@ -208,24 +209,39 @@ void Renderer::createTexture() {
 
   if (!pixels) MAPLE_FATAL("failed to load texture image");
 
-  auto stage = mMemoryManager.createBuffer(imageSize,
-                                           vk::BufferUsageFlagBits::eTransferSrc,
-                                           VMA_MEMORY_USAGE_AUTO,
-                                           VMA_ALLOCATION_CREATE_MAPPED_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-
-  stage.Upload(pixels, stage.size);
+  auto stage = mAllocator.CreateBuffer(imageSize, vkm::Allocator::BufType::Stage);
+  stage.Upload(pixels, imageSize);
   stbi_image_free(pixels);
 
-  mTexture = mMemoryManager.createTexture({static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight), 1},
-                                          vk::Format::eR8G8B8A8Srgb,
-                                          vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
-                                          vk::ImageAspectFlagBits::eColor);
+  mImage = mAllocator.CreateImage({
+    .extent = {static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight), 1},
+    .usage = vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
+  });
 
   auto cmd = beginSingleTimeCommands();
-  mTexture.image.TransitionLayout(cmd, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);
-  mTexture.image.UploadBuffer(cmd, stage, texWidth, texHeight);
-  mTexture.image.TransitionLayout(cmd, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal);
+  mImage.TransitionLayout(cmd, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);
+  mImage.UploadBuffer(cmd, stage.buffer, texWidth, texHeight);
+  mImage.TransitionLayout(cmd, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal);
   endSingleTimeCommands(cmd);
+
+  // auto stage = mMemoryManager.createBuffer(imageSize,
+  //                                          vk::BufferUsageFlagBits::eTransferSrc,
+  //                                          VMA_MEMORY_USAGE_AUTO,
+  //                                          VMA_ALLOCATION_CREATE_MAPPED_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+
+  // stage.Upload(pixels, stage.size);
+  // stbi_image_free(pixels);
+
+  // mTexture = mMemoryManager.createTexture({static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight), 1},
+  //                                         vk::Format::eR8G8B8A8Srgb,
+  //                                         vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
+  //                                         vk::ImageAspectFlagBits::eColor);
+
+  // auto cmd = beginSingleTimeCommands();
+  // mTexture.image.TransitionLayout(cmd, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);
+  // mTexture.image.UploadBuffer(cmd, stage, texWidth, texHeight);
+  // mTexture.image.TransitionLayout(cmd, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal);
+  // endSingleTimeCommands(cmd);
 }
 
 void Renderer::createTextureSampler() {
@@ -267,43 +283,28 @@ void Renderer::createMeshBuffer() {
     }
   }
 
-  auto stage = mMemoryManager.createBuffer(mMesh.GetTotalSizeBytes(),
-                                           vk::BufferUsageFlagBits::eTransferSrc,
-                                           VMA_MEMORY_USAGE_AUTO,
-                                           VMA_ALLOCATION_CREATE_MAPPED_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+  auto stage = mAllocator.CreateBuffer(mMesh.GetTotalSizeBytes(), vkm::Allocator::BufType::Stage);
   stage.Upload(mMesh.vertices.data(), mMesh.GetVerticesSizeBytes());
   stage.Upload(mMesh.indices.data(), mMesh.GetIndicesSizeBytes(), mMesh.GetVerticesSizeBytes());
 
-  mMeshBuffer = mMemoryManager.createBuffer(
-    stage.size,
-    vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eIndexBuffer,
-    VMA_MEMORY_USAGE_AUTO,
-    0);
+  mMeshBuffer = mAllocator.CreateBuffer(stage.size, vkm::Allocator::BufType::Mesh);
 
-  copyBuffer(stage.buffer, mMeshBuffer.buffer, stage.size);
+  auto cmd = beginSingleTimeCommands();
+  stage.CopyToBuffer(cmd, mMeshBuffer.buffer, {.size = stage.size});
+  endSingleTimeCommands(cmd);
 }
 
 void Renderer::createUniformBuffers() {
   mUniformBuffers.clear();
 
   vk::DeviceSize bufferSize = sizeof(UniformBufferObject);
-  for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+  for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
     // With the correct flags vma will automatically map the memory and persist it, no need to map once and store the pointers
-    mUniformBuffers.push_back(mMemoryManager.createBuffer(bufferSize,
-                                                          vk::BufferUsageFlagBits::eUniformBuffer,
-                                                          VMA_MEMORY_USAGE_AUTO,
-                                                          VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT));
-  }
+    mUniformBuffers.push_back(mAllocator.CreateBuffer(bufferSize, vkm::Allocator::BufType::UBO));
 
   mInstanceDataSSBOs.clear();
   vk::DeviceSize bufSize = sizeof(glm::mat4) * numInstances;
-  for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-    mInstanceDataSSBOs.push_back(
-      mMemoryManager.createBuffer(bufSize,
-                                  vk::BufferUsageFlagBits::eStorageBuffer,
-                                  VMA_MEMORY_USAGE_AUTO,
-                                  VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT));
-  }
+  for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) mInstanceDataSSBOs.push_back(mAllocator.CreateBuffer(bufSize, vkm::Allocator::BufType::SSBO));
 }
 
 void Renderer::createDescriptorPool() {
@@ -344,7 +345,7 @@ void Renderer::createDescriptorSets() {
 
     vk::DescriptorImageInfo imageInfo{
       .sampler = mSampler.sampler,
-      .imageView = mTexture.view,
+      .imageView = mImage.view,
       .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
     };
 
@@ -375,7 +376,7 @@ void Renderer::recordCommandBuffer(uint32_t imageIdx) {
                                vk::ImageAspectFlagBits::eColor);
 
   // Depth attachment transition
-  vkh::transition_image_layout(mSwapChain.depthTexture.image.image,
+  vkh::transition_image_layout(mSwapChain.depthImage.img,
                                cmd,
                                vk::ImageLayout::eUndefined,
                                vk::ImageLayout::eDepthStencilAttachmentOptimal,
@@ -388,7 +389,7 @@ void Renderer::recordCommandBuffer(uint32_t imageIdx) {
   vk::ClearValue clearColor = vk::ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f);
   vk::ClearValue clearDepth = vk::ClearDepthStencilValue(1.0f, 0);
   vk::RenderingAttachmentInfo depthAttachmentInfo = {
-    .imageView = mSwapChain.depthTexture.view,
+    .imageView = mSwapChain.depthImage.view,
     .imageLayout = vk::ImageLayout::eDepthAttachmentOptimal,
     .loadOp = vk::AttachmentLoadOp::eClear,
     .storeOp = vk::AttachmentStoreOp::eDontCare,
