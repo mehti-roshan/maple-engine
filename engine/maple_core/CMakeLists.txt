@@ -1,4 +1,4 @@
-add_library(maple_core STATIC engine.cpp camera.cpp input.cpp noise.cpp prng.cpp time.cpp ../third_party/stb_image.cpp)
+add_library(maple_core STATIC camera.cpp input.cpp noise.cpp prng.cpp time.cpp)
 
 target_include_directories(maple_core PUBLIC ${CMAKE_SOURCE_DIR})
 

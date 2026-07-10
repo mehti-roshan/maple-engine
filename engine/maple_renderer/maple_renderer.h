@@ -32,7 +32,7 @@ class MapleRenderer {
   void DestroyMesh(MeshHndl handle);
   MaterialHndl CreateMaterial(const std::string& shaderCode, const std::string& shaderFileName, const MaterialBuilderData& data);
   void DestroyMaterial(MaterialHndl handle);
-  void CreateTexture(const std::string& name, glm::uvec2 dimensions, std::span<const uint8_t> bytes, uint8_t pixelSize, Format format);
+  void CreateTexture(const std::string& name, glm::uvec2 dimensions, std::span<const uint8_t> bytes, Format format);
   void DestroyTexture(const std::string& name);
 
   std::optional<Format> FindFirstSupportedTextureFormat(std::span<const Format> formats) const;

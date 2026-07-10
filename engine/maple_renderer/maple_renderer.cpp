@@ -120,7 +120,7 @@ MapleRenderer::MaterialHndl MapleRenderer::CreateMaterial(const std::string& sha
 
 void MapleRenderer::DestroyMaterial(MaterialHndl handle) { impl->mMaterialPool.Remove(handle); }
 
-void MapleRenderer::CreateTexture(const std::string& name, glm::uvec2 dimensions, std::span<const uint8_t> bytes, uint8_t pixelSize, Format format) {
+void MapleRenderer::CreateTexture(const std::string& name, glm::uvec2 dimensions, std::span<const uint8_t> bytes, Format format) {
   auto& ctx = impl->mCtx;
 
   vk::ImageUsageFlags usage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst;

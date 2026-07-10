@@ -14,8 +14,6 @@
 #include "vk_device_features.h"
 
 #define GLM_FORCE_RADIANS
-#include <engine/third_party/stb_image.h>
-
 #include <glm/ext/matrix_clip_space.hpp>
 #include <glm/ext/matrix_transform.hpp>
 #include <glm/fwd.hpp>

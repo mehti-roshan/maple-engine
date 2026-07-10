@@ -1,7 +1,7 @@
-#include <engine/maple_core/engine.h>
+#include <engine/app.h>
 
 int main(int argc, char** argv) {
-  maple::Engine app{};
+  maple::App app{};
   app.Run();
   return 0;
 }
