@@ -3,6 +3,7 @@
 #include "maple_core/input.h"
 #include "maple_core/time.h"
 #include "maple_renderer/maple_renderer.h"
+#include "maple_scene.h"
 #include "maple_window/maple_window.h"
 
 namespace maple {
@@ -15,10 +16,11 @@ class App {
  private:
   MapleWindow mWindow;
   MapleRenderer mRenderer;
+  MapleScene mScene;
   Time mTime;
-  RenderGraph::CompileResult mCompiledRenderGraph;
   Input mInput;
   Camera mCam;
+  RenderGraph::CompileResult mCompiledRenderGraph;
 
   MapleRenderer::MeshHndl mMesh;
   MapleRenderer::MaterialHndl mMaterial;

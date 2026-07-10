@@ -1,19 +1,19 @@
-#include "maple_asset/maple_asset.h"
-#include "maple_logging/log_macros.h"
-#include "maple_renderer/material_builder_data.h"
-#include "maple_renderer/render_graph.h"
-
 #include <bit>
 #include <cstdlib>
 #include <ctime>
+#include <glm/fwd.hpp>
 #include <utility>
 #include <vector>
 
-#include "maple_core/input_enums.h"
-#include "maple_window/maple_window.h"
 #include "enums.h"
+#include "maple_asset/maple_asset.h"
+#include "maple_core/input_enums.h"
 #include "maple_core/noise.h"
 #include "maple_core/prng.h"
+#include "maple_logging/log_macros.h"
+#include "maple_renderer/material_builder_data.h"
+#include "maple_renderer/render_graph.h"
+#include "maple_window/maple_window.h"
 
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #define GLM_FORCE_RADIANS
@@ -25,91 +25,6 @@
 #include "app.h"
 
 namespace maple {
-
-void App::Run() {
-  Init();
-
-  mInput.Bind("exit", {Key::Escape});
-  mInput.Bind("exit", {GamepadButton::Start});
-
-  mInput.Bind("forward", {Key::W});
-  mInput.Bind("forward", {Key::S, false});
-  mInput.Bind("sideways", {Key::D});
-  mInput.Bind("sideways", {Key::A, false});
-  mInput.Bind("upwards", {Key::Space});
-  mInput.Bind("upwards", {Key::LeftControl, false});
-
-  mInput.Bind("roll", {Key::E});
-  mInput.Bind("roll", {Key::Q, false});
-
-  mInput.Bind("forward", {GamepadAxis::LeftY, false});
-  mInput.Bind("sideways", {GamepadAxis::LeftX});
-  mInput.Bind("upwards", {GamepadButton::A});
-  mInput.Bind("upwards", {GamepadButton::B, false});
-
-  mInput.Bind("look_vertical", {GamepadAxis::RightY, false});
-  mInput.Bind("look_horizontal", {GamepadAxis::RightX, false});
-  mInput.Bind("roll", {GamepadButton::RightBumper});
-  mInput.Bind("roll", {GamepadButton::LeftBumper, false});
-
-  std::vector<glm::mat4> InstanceTransforms;
-  PRNG rng(time(0));
-  Noise noise(rng.NextUInt64(), Noise::Type::Perlin);
-  noise.SetFrequency(0.1f).SetFractalType(Noise::FractalType::FBm).SetFractalOctaves(2);
-
-  uint32_t dimensions = 800;
-  for (size_t x = 0; x < dimensions; x++) {
-    for (int64_t z = 0; z < dimensions; z++) {
-      float n = noise.GetNoisef(x, z) * 5.0f;
-
-      InstanceTransforms.push_back(glm::translate(glm::mat4(1.0f), glm::vec3(x, 0, -z) + glm::vec3(0, n, 0)));
-    }
-  }
-
-  while (!mWindow.ShouldClose()) {
-    mTime.BeginFrame();
-    mInput.BeginFrame();
-    mWindow.PollEvents();
-
-    if (mInput.Released("exit")) mWindow.SetShouldClose(true);
-
-    float movementSpeed = 15.0f;
-    float rollSpeed = 1.5f;
-    float mouseSens = 0.01f;
-    float gamePadSens = 1.0f;
-
-    auto movement = mCam.Forward() * mInput.Value("forward") + mCam.Right() * mInput.Value("sideways") + mCam.Up() * mInput.Value("upwards");
-    if (glm::length(movement) > 1.0f * mTime.DeltaTime()) movement = glm::normalize(movement);
-    movement *= movementSpeed * mTime.DeltaTime();
-    mCam.SetPosition(mCam.GetPosition() + movement);
-
-    glm::vec2 look(mInput.Value("look_horizontal"), mInput.Value("look_vertical"));
-    look *= gamePadSens * mTime.DeltaTime();
-    look += -mInput.GetMouseDelta() * mouseSens;
-    mCam.Yaw(look.x);
-    mCam.Pitch(look.y);
-    mCam.Roll(mInput.Value("roll") * rollSpeed * mTime.DeltaTime());
-
-    auto [frameBufferX, frameBufferY] = mWindow.GetFrameBufferSize();
-
-    MapleRenderer::UBO ubo{
-      .view = mCam.GetView(),
-      .proj = mCam.GetProjection(float(frameBufferX) / frameBufferY, 60.0f, 0.1f, 1000.0f),
-      .time = static_cast<float>(mTime.TimeSinceStart()),
-    };
-
-    std::vector<std::string> usedResources = {mTex1};
-    std::array meshDraws = {MapleRenderer::MeshDraw{mMesh, InstanceTransforms, usedResources}};
-
-    std::array materialDraws = {MapleRenderer::MaterialDraw{.material = mMaterial, .meshes = meshDraws}};
-    std::array passDraws = {MapleRenderer::PassDraw{
-      .passName = "draw",
-      .materialDraws = materialDraws,
-    }};
-
-    mRenderer.DrawFrame(ubo, mCompiledRenderGraph, passDraws);
-  }
-}
 
 void App::Init() {
   logging::Log::init();
@@ -201,6 +116,105 @@ void App::Init() {
   }
 
   mTime.Initialize();
+}
+
+void App::Run() {
+  Init();
+
+  mInput.Bind("exit", {Key::Escape});
+  mInput.Bind("exit", {GamepadButton::Start});
+
+  mInput.Bind("forward", {Key::W});
+  mInput.Bind("forward", {Key::S, false});
+  mInput.Bind("sideways", {Key::D});
+  mInput.Bind("sideways", {Key::A, false});
+  mInput.Bind("upwards", {Key::Space});
+  mInput.Bind("upwards", {Key::LeftControl, false});
+
+  mInput.Bind("roll", {Key::E});
+  mInput.Bind("roll", {Key::Q, false});
+
+  mInput.Bind("forward", {GamepadAxis::LeftY, false});
+  mInput.Bind("sideways", {GamepadAxis::LeftX});
+  mInput.Bind("upwards", {GamepadButton::A});
+  mInput.Bind("upwards", {GamepadButton::B, false});
+
+  mInput.Bind("look_vertical", {GamepadAxis::RightY, false});
+  mInput.Bind("look_horizontal", {GamepadAxis::RightX, false});
+  mInput.Bind("roll", {GamepadButton::RightBumper});
+  mInput.Bind("roll", {GamepadButton::LeftBumper, false});
+
+  // Noise noise(rng.NextUInt64(), Noise::Type::Perlin);
+  // noise.SetFrequency(0.1f).SetFractalType(Noise::FractalType::FBm).SetFractalOctaves(2);
+  PRNG rng(time(0));
+
+  struct Transform {
+    glm::vec3 pos{};
+  };
+
+  struct Velocity {
+    glm::vec3 velocity{};
+  };
+
+  for (size_t i = 0; i < 10000; i++) {
+    auto ent = mScene.CreateEntity();
+    mScene.Add<Transform>(ent, Transform{glm::vec3(0)});
+    auto dir = glm::normalize(glm::vec3(rng.NextFloat(-1), rng.NextFloat(-1), rng.NextFloat(-1)));
+    auto speed = rng.NextFloat() * 10.0f + 5.0f;
+    mScene.Add<Velocity>(ent, Velocity{dir * speed});
+  }
+
+  std::vector<glm::mat4> instances;
+
+  while (!mWindow.ShouldClose()) {
+    mTime.BeginFrame();
+    mInput.BeginFrame();
+    mWindow.PollEvents();
+
+    if (mInput.Released("exit")) mWindow.SetShouldClose(true);
+
+    float movementSpeed = 15.0f;
+    float rollSpeed = 1.5f;
+    float mouseSens = 0.01f;
+    float gamePadSens = 1.0f;
+
+    auto movement = mCam.Forward() * mInput.Value("forward") + mCam.Right() * mInput.Value("sideways") + mCam.Up() * mInput.Value("upwards");
+    if (glm::length(movement) > 1.0f * mTime.DeltaTime()) movement = glm::normalize(movement);
+    movement *= movementSpeed * mTime.DeltaTime();
+    mCam.SetPosition(mCam.GetPosition() + movement);
+
+    glm::vec2 look(mInput.Value("look_horizontal"), mInput.Value("look_vertical"));
+    look *= gamePadSens * mTime.DeltaTime();
+    look += -mInput.GetMouseDelta() * mouseSens;
+    mCam.Yaw(look.x);
+    mCam.Pitch(look.y);
+    mCam.Roll(mInput.Value("roll") * rollSpeed * mTime.DeltaTime());
+
+    auto [frameBufferX, frameBufferY] = mWindow.GetFrameBufferSize();
+
+    instances.clear();
+    mScene.View<Transform, Velocity>().each([&](Transform& transform, Velocity& velocity) {
+      transform.pos += velocity.velocity * mTime.DeltaTime();
+      instances.push_back(glm::translate(glm::mat4(1.0f), transform.pos));
+    });
+
+    MapleRenderer::UBO ubo{
+      .view = mCam.GetView(),
+      .proj = mCam.GetProjection(float(frameBufferX) / frameBufferY, 60.0f, 0.1f, 1000.0f),
+      .time = static_cast<float>(mTime.TimeSinceStart()),
+    };
+
+    std::vector<std::string> usedResources = {mTex1};
+    std::array meshDraws = {MapleRenderer::MeshDraw{mMesh, instances, usedResources}};
+
+    std::array materialDraws = {MapleRenderer::MaterialDraw{.material = mMaterial, .meshes = meshDraws}};
+    std::array passDraws = {MapleRenderer::PassDraw{
+      .passName = "draw",
+      .materialDraws = materialDraws,
+    }};
+
+    mRenderer.DrawFrame(ubo, mCompiledRenderGraph, passDraws);
+  }
 }
 
 App::~App() { MAPLE_INFO("Shutting down..."); }
