@@ -1,7 +1,9 @@
 #include <bit>
 #include <cstdlib>
 #include <ctime>
-#include <glm/fwd.hpp>
+#include <glm/ext/quaternion_transform.hpp>
+#include <glm/ext/quaternion_trigonometric.hpp>
+#include <glm/gtc/constants.hpp>
 #include <utility>
 #include <vector>
 
@@ -11,6 +13,7 @@
 #include "maple_core/noise.h"
 #include "maple_core/prng.h"
 #include "maple_logging/log_macros.h"
+#include "maple_physics.h"
 #include "maple_renderer/material_builder_data.h"
 #include "maple_renderer/render_graph.h"
 #include "maple_window/maple_window.h"
@@ -51,6 +54,8 @@ void App::Init() {
 
   mCam.SetPosition(glm::vec3(0));
 
+  mPhysics.Initialize(glm::vec3(0, -9.81, 0));
+
   mRenderer = MapleRenderer(
     mWindow.RequiredVkInstanceExtensions(),
     [&](void* pVkInstance) { return mWindow.CreateWindowSurface(pVkInstance); },
@@ -75,11 +80,49 @@ void App::Init() {
     glm::vec3 pos;
     glm::vec2 uv;
   };
+
+  std::array frontVerts = {
+    glm::vec4(-0.5f, -0.5f, 0.5f, 1.0f),
+    glm::vec4(-0.5f, 0.5f, 0.5f, 1.0f),
+    glm::vec4(0.5f, -0.5f, 0.5f, 1.0f),
+    glm::vec4(0.5f, 0.5f, 0.5f, 1.0f),
+  };
   std::array verts = {
-    Vertex{glm::vec3(-0.5f, -0.5f, 0.0f), glm::vec2(0.0f, 0.0f)},
-    Vertex{glm::vec3(-0.5f, 0.5f, 0.0f), glm::vec2(0.0f, 1.0f)},
-    Vertex{glm::vec3(0.5f, -0.5f, 0.0f), glm::vec2(1.0f, 0.0f)},
-    Vertex{glm::vec3(0.5f, 0.5f, 0.0f), glm::vec2(1.0f, 1.0f)},
+    // Front Face
+    Vertex{glm::vec3(frontVerts[0]), glm::vec2(0.0f, 0.0f)},
+    Vertex{glm::vec3(frontVerts[1]), glm::vec2(0.0f, 1.0f)},
+    Vertex{glm::vec3(frontVerts[2]), glm::vec2(1.0f, 0.0f)},
+    Vertex{glm::vec3(frontVerts[3]), glm::vec2(1.0f, 1.0f)},
+
+    // Right Face
+    Vertex{glm::vec3(frontVerts[0] * glm::rotate(glm::mat4(1.0f), glm::radians(90.0f), glm::vec3(0, 1, 0))), glm::vec2(0.0f, 0.0f)},
+    Vertex{glm::vec3(frontVerts[1] * glm::rotate(glm::mat4(1.0f), glm::radians(90.0f), glm::vec3(0, 1, 0))), glm::vec2(0.0f, 1.0f)},
+    Vertex{glm::vec3(frontVerts[2] * glm::rotate(glm::mat4(1.0f), glm::radians(90.0f), glm::vec3(0, 1, 0))), glm::vec2(1.0f, 0.0f)},
+    Vertex{glm::vec3(frontVerts[3] * glm::rotate(glm::mat4(1.0f), glm::radians(90.0f), glm::vec3(0, 1, 0))), glm::vec2(1.0f, 1.0f)},
+
+    // Back Face
+    Vertex{glm::vec3(frontVerts[0] * glm::rotate(glm::mat4(1.0f), glm::radians(180.0f), glm::vec3(0, 1, 0))), glm::vec2(0.0f, 0.0f)},
+    Vertex{glm::vec3(frontVerts[1] * glm::rotate(glm::mat4(1.0f), glm::radians(180.0f), glm::vec3(0, 1, 0))), glm::vec2(0.0f, 1.0f)},
+    Vertex{glm::vec3(frontVerts[2] * glm::rotate(glm::mat4(1.0f), glm::radians(180.0f), glm::vec3(0, 1, 0))), glm::vec2(1.0f, 0.0f)},
+    Vertex{glm::vec3(frontVerts[3] * glm::rotate(glm::mat4(1.0f), glm::radians(180.0f), glm::vec3(0, 1, 0))), glm::vec2(1.0f, 1.0f)},
+
+    // Left Face
+    Vertex{glm::vec3(frontVerts[0] * glm::rotate(glm::mat4(1.0f), glm::radians(270.0f), glm::vec3(0, 1, 0))), glm::vec2(0.0f, 0.0f)},
+    Vertex{glm::vec3(frontVerts[1] * glm::rotate(glm::mat4(1.0f), glm::radians(270.0f), glm::vec3(0, 1, 0))), glm::vec2(0.0f, 1.0f)},
+    Vertex{glm::vec3(frontVerts[2] * glm::rotate(glm::mat4(1.0f), glm::radians(270.0f), glm::vec3(0, 1, 0))), glm::vec2(1.0f, 0.0f)},
+    Vertex{glm::vec3(frontVerts[3] * glm::rotate(glm::mat4(1.0f), glm::radians(270.0f), glm::vec3(0, 1, 0))), glm::vec2(1.0f, 1.0f)},
+
+    // Up Face
+    Vertex{glm::vec3(frontVerts[0] * glm::rotate(glm::mat4(1.0f), glm::radians(90.0f), glm::vec3(1, 0, 0))), glm::vec2(0.0f, 0.0f)},
+    Vertex{glm::vec3(frontVerts[1] * glm::rotate(glm::mat4(1.0f), glm::radians(90.0f), glm::vec3(1, 0, 0))), glm::vec2(0.0f, 1.0f)},
+    Vertex{glm::vec3(frontVerts[2] * glm::rotate(glm::mat4(1.0f), glm::radians(90.0f), glm::vec3(1, 0, 0))), glm::vec2(1.0f, 0.0f)},
+    Vertex{glm::vec3(frontVerts[3] * glm::rotate(glm::mat4(1.0f), glm::radians(90.0f), glm::vec3(1, 0, 0))), glm::vec2(1.0f, 1.0f)},
+
+    // Down Face
+    Vertex{glm::vec3(frontVerts[0] * glm::rotate(glm::mat4(1.0f), glm::radians(270.0f), glm::vec3(1, 0, 0))), glm::vec2(0.0f, 0.0f)},
+    Vertex{glm::vec3(frontVerts[1] * glm::rotate(glm::mat4(1.0f), glm::radians(270.0f), glm::vec3(1, 0, 0))), glm::vec2(0.0f, 1.0f)},
+    Vertex{glm::vec3(frontVerts[2] * glm::rotate(glm::mat4(1.0f), glm::radians(270.0f), glm::vec3(1, 0, 0))), glm::vec2(1.0f, 0.0f)},
+    Vertex{glm::vec3(frontVerts[3] * glm::rotate(glm::mat4(1.0f), glm::radians(270.0f), glm::vec3(1, 0, 0))), glm::vec2(1.0f, 1.0f)},
   };
 
   std::vector<uint32_t> indices = {
@@ -92,14 +135,24 @@ void App::Init() {
     3,
   };
 
+  uint32_t numVerts = 4;
+  for (size_t face = 0; face < 5; face++) {
+    indices.push_back(indices[0] + numVerts);
+    indices.push_back(indices[1] + numVerts);
+    indices.push_back(indices[2] + numVerts);
+    indices.push_back(indices[3] + numVerts);
+    indices.push_back(indices[4] + numVerts);
+    indices.push_back(indices[5] + numVerts);
+    numVerts += 4;
+  }
+
   mMesh = mRenderer.CreateMesh({
     .verts = std::as_bytes(std::span<const Vertex>(verts)),
     .indices = indices,
     .numVerts = static_cast<uint32_t>(verts.size()),
   });
 
-  mMaterial = mRenderer.CreateMaterial(
-    MapleAsset::ReadFileStr("assets/shaders/shader.slang"), "shader", {.rasterizer = {.cullMode = MaterialBuilderData::CullModeFlagBits::None}});
+  mMaterial = mRenderer.CreateMaterial(MapleAsset::ReadFileStr("assets/shaders/shader.slang"), "shader", {.rasterizer = {}});
 
   std::array colorFormats = {Format::R8G8B8A8_SRGB, Format::B8G8R8A8_SRGB};
   auto format = mRenderer.FindFirstSupportedTextureFormat(colorFormats);
@@ -128,16 +181,16 @@ void App::Run() {
   mInput.Bind("forward", {Key::S, false});
   mInput.Bind("sideways", {Key::D});
   mInput.Bind("sideways", {Key::A, false});
-  mInput.Bind("upwards", {Key::Space});
-  mInput.Bind("upwards", {Key::LeftControl, false});
+  mInput.Bind("upward", {Key::Space});
+  mInput.Bind("upward", {Key::LeftControl, false});
 
   mInput.Bind("roll", {Key::E});
   mInput.Bind("roll", {Key::Q, false});
 
   mInput.Bind("forward", {GamepadAxis::LeftY, false});
   mInput.Bind("sideways", {GamepadAxis::LeftX});
-  mInput.Bind("upwards", {GamepadButton::A});
-  mInput.Bind("upwards", {GamepadButton::B, false});
+  mInput.Bind("upward", {GamepadButton::A});
+  mInput.Bind("upward", {GamepadButton::B, false});
 
   mInput.Bind("look_vertical", {GamepadAxis::RightY, false});
   mInput.Bind("look_horizontal", {GamepadAxis::RightX, false});
@@ -156,15 +209,37 @@ void App::Run() {
     glm::vec3 velocity{};
   };
 
-  for (size_t i = 0; i < 10000; i++) {
+  std::vector<PhysicsBodyID> physicsBodies;
+
+  auto shape = MaplePhysics::Box{};
+  for (size_t i = 0; i < 30000; i++) {
     auto ent = mScene.CreateEntity();
     mScene.Add<Transform>(ent, Transform{glm::vec3(0)});
-    auto dir = glm::normalize(glm::vec3(rng.NextFloat(-1), rng.NextFloat(-1), rng.NextFloat(-1)));
-    auto speed = rng.NextFloat() * 10.0f + 5.0f;
-    mScene.Add<Velocity>(ent, Velocity{dir * speed});
+    auto dir = glm::normalize(glm::vec3(rng.NextFloat(-1), rng.NextFloat(), rng.NextFloat(-1)));
+    auto speed = rng.NextFloat() * 500.0f + 50.0f;
+    auto pos = dir * speed;
+
+    auto angle = rng.NextFloat(0, glm::two_pi<float>());
+    auto axis = glm::vec3(rng.NextFloat(-1.0f, 1.0f), rng.NextFloat(-1.0f, 1.0f), rng.NextFloat(-1.0f, 1.0f));
+
+    auto data = MaplePhysics::BodyInfo{.shape = shape,
+                                       .motionType = MaplePhysics::MotionType::Dynamic,
+                                       .position = pos,
+                                       .orientation = glm::normalize(glm::angleAxis(angle, axis)),
+                                       .restitution = 0.2f};
+    auto rb = mPhysics.CreateRigidBody(data);
+
+    physicsBodies.push_back(rb);
   }
 
+  auto data = MaplePhysics::BodyInfo{MaplePhysics::Plane{}, MaplePhysics::MotionType::Static};
+  auto rb = mPhysics.CreateRigidBody(data);
+  // physicsBodies.push_back(rb);
+
   std::vector<glm::mat4> instances;
+
+  float physicsDeltaTime = 1.0f / 60.0f;
+  float remainingPhysicsTime = 0.0f;
 
   while (!mWindow.ShouldClose()) {
     mTime.BeginFrame();
@@ -178,8 +253,9 @@ void App::Run() {
     float mouseSens = 0.01f;
     float gamePadSens = 1.0f;
 
-    auto movement = mCam.Forward() * mInput.Value("forward") + mCam.Right() * mInput.Value("sideways") + mCam.Up() * mInput.Value("upwards");
-    if (glm::length(movement) > 1.0f * mTime.DeltaTime()) movement = glm::normalize(movement);
+    auto movement = mCam.Forward() * mInput.Value("forward") + mCam.Right() * mInput.Value("sideways") + mCam.Up() * mInput.Value("upward");
+    auto movementLength = glm::length(movement);
+    if (movementLength > 1.0f * mTime.DeltaTime()) movement /= movementLength;
     movement *= movementSpeed * mTime.DeltaTime();
     mCam.SetPosition(mCam.GetPosition() + movement);
 
@@ -190,14 +266,29 @@ void App::Run() {
     mCam.Pitch(look.y);
     mCam.Roll(mInput.Value("roll") * rollSpeed * mTime.DeltaTime());
 
-    auto [frameBufferX, frameBufferY] = mWindow.GetFrameBufferSize();
+    remainingPhysicsTime += mTime.DeltaTime();
+    while (remainingPhysicsTime >= physicsDeltaTime) {
+      remainingPhysicsTime -= physicsDeltaTime;
+      mPhysics.Update(physicsDeltaTime);
+    }
 
     instances.clear();
-    mScene.View<Transform, Velocity>().each([&](Transform& transform, Velocity& velocity) {
-      transform.pos += velocity.velocity * mTime.DeltaTime();
-      instances.push_back(glm::translate(glm::mat4(1.0f), transform.pos));
-    });
+    for (auto id : physicsBodies) {
+      glm::mat4 rotation = glm::mat4_cast(mPhysics.GetBodyRotation(id));
+      glm::mat4 translation = glm::translate(glm::mat4(1.0f), mPhysics.GetBodyPosition(id));
+      instances.push_back(translation * rotation);
+    }
 
+    instances.push_back(glm::translate(glm::scale(glm::mat4(1.0f), glm::vec3(1000)), glm::vec3(0, -0.5, 0)));
+
+    auto rayResult = mPhysics.RaycastWNormal(mCam.GetPosition(), mCam.Forward(), 1000.0f);
+    if (rayResult != std::nullopt) {
+      instances.push_back(glm::scale(glm::translate(glm::mat4(1.0f), rayResult->position), glm::vec3(0.1f)));
+      auto normal = rayResult->normal;
+      MAPLE_DEBUG("{} {} {}", normal.x, normal.y, normal.z);
+    }
+
+    auto [frameBufferX, frameBufferY] = mWindow.GetFrameBufferSize();
     MapleRenderer::UBO ubo{
       .view = mCam.GetView(),
       .proj = mCam.GetProjection(float(frameBufferX) / frameBufferY, 60.0f, 0.1f, 1000.0f),

@@ -2,6 +2,7 @@
 #include "maple_core/camera.h"
 #include "maple_core/input.h"
 #include "maple_core/time.h"
+#include "maple_physics.h"
 #include "maple_renderer/maple_renderer.h"
 #include "maple_scene.h"
 #include "maple_window/maple_window.h"
@@ -16,6 +17,7 @@ class App {
  private:
   MapleWindow mWindow;
   MapleRenderer mRenderer;
+  MaplePhysics mPhysics;
   MapleScene mScene;
   Time mTime;
   Input mInput;

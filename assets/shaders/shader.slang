@@ -60,5 +60,5 @@ float4 fragMain(VSOutput vertIn) : SV_TARGET {
   dist = 1.0 - dist;
   float4 tint = float4(sin(ubo.time) * 0.5 + 0.5, cos(ubo.time) * 0.5 + 0.5, 0.0, 1.0);
   uint32_t textureIdx = materialBuffer[push.materialBufferOffset];
-  return textures[textureIdx].Sample(vertIn.uv) * dist;
+  return textures[textureIdx].Sample(vertIn.uv);
 }
