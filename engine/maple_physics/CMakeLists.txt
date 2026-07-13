@@ -1,7 +1,7 @@
 FetchContent_Declare(
   JoltPhysics
   GIT_REPOSITORY "https://github.com/jrouwe/JoltPhysics.git"
-  GIT_TAG "v5.5.0"
+  GIT_TAG "v5.6.0"
   SOURCE_SUBDIR Build
 )
 
