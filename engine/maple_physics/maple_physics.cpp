@@ -11,6 +11,7 @@
 #include "Jolt/Core/JobSystemThreadPool.h"
 #include "Jolt/Core/Reference.h"
 #include "Jolt/Geometry/Plane.h"
+#include "Jolt/Math/DMat44.h"
 #include "Jolt/Math/MathTypes.h"
 #include "Jolt/Math/Real.h"
 #include "Jolt/Math/Vec3.h"
@@ -19,6 +20,7 @@
 #include "Jolt/Physics/Body/BodyInterface.h"
 #include "Jolt/Physics/Body/BodyLock.h"
 #include "Jolt/Physics/Collision/CastResult.h"
+#include "Jolt/Physics/Collision/CollideShape.h"
 #include "Jolt/Physics/Collision/RayCast.h"
 #include "Jolt/Physics/Collision/Shape/BoxShape.h"
 #include "Jolt/Physics/Collision/Shape/CapsuleShape.h"
@@ -263,6 +265,7 @@ PhysicsBodyID MaplePhysics::CreateRigidBody(BodyInfo& info) {
 
   JPH::BodyCreationSettings settings(shape, JPH::RVec3(0, 0, 0), JPH::Quat::sIdentity(), JPH::EMotionType::Dynamic, Layers::MOVING);
 
+  settings.mUserData = info.entityID;
   settings.mMotionType = hlp::ToJolt(info.motionType);
   settings.mMotionQuality = hlp::ToJolt(info.motionQuality);
   settings.mOverrideMassProperties = JPH::EOverrideMassProperties::CalculateInertia;
@@ -292,6 +295,10 @@ void MaplePhysics::DestroyRigidBody(PhysicsBodyID id) {
 
   impl->bodyInterface->RemoveBody(bodyID);
   impl->bodyInterface->DestroyBody(bodyID);
+}
+
+uint64_t MaplePhysics::GetBodyEntity(PhysicsBodyID id) {
+  return impl->bodyInterface->GetUserData(static_cast<JPH::BodyID>(id));
 }
 
 glm::vec3 MaplePhysics::GetBodyPosition(PhysicsBodyID id) const {
@@ -363,6 +370,31 @@ std::optional<MaplePhysics::RayCastResultWithNormal> MaplePhysics::RaycastWNorma
   };
 }
 
-// TODO: implement a shape cast method
+std::vector<PhysicsBodyID> MaplePhysics::OverlapSphere(Sphere shape, const glm::vec3& origin) {
+  std::vector<PhysicsBodyID> result;
+
+  MaplePhysics::CollisionShape sh = shape;
+  auto joltShape = constructShape(sh);
+
+  class Collector : public JPH::CollideShapeCollector {
+   public:
+    std::vector<PhysicsBodyID>& results;
+
+    Collector(std::vector<PhysicsBodyID>& results) : results(results) {}
+
+    void AddHit(const JPH::CollideShapeResult& result) override { results.push_back(result.mBodyID2.GetIndexAndSequenceNumber()); }
+  };
+
+  Collector collector(result);
+
+  JPH::RMat44 CoMTrans = JPH::RMat44::sIdentity();
+  CoMTrans.SetTranslation(JPH::RVec3Arg(origin.x, origin.y, origin.z)); // TODO: fix
+  JPH::CollideShapeSettings settings;
+  
+  auto& query = impl->physicsSystem.GetNarrowPhaseQuery();
+  query.CollideShape(joltShape, JPH::Vec3::sReplicate(1.0f), CoMTrans, settings, JPH::RVec3::sZero(), collector);
+
+  return result;
+}
 
 }  // namespace maple

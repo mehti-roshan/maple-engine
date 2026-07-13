@@ -14,6 +14,7 @@
 #include "maple_core/prng.h"
 #include "maple_logging/log_macros.h"
 #include "maple_physics.h"
+#include "maple_renderer.h"
 #include "maple_renderer/material_builder_data.h"
 #include "maple_renderer/render_graph.h"
 #include "maple_window/maple_window.h"
@@ -168,12 +169,6 @@ void App::Init() {
     mRenderer.CreateTexture(mTex2, img.size, img.bytes, *format);
   }
 
-  mTime.Initialize();
-}
-
-void App::Run() {
-  Init();
-
   mInput.Bind("exit", {Key::Escape});
   mInput.Bind("exit", {GamepadButton::Start});
 
@@ -197,6 +192,17 @@ void App::Run() {
   mInput.Bind("roll", {GamepadButton::RightBumper});
   mInput.Bind("roll", {GamepadButton::LeftBumper, false});
 
+  mInput.Bind("click", {MouseButton::Left});
+  mInput.Bind("click", {GamepadAxis::RightTrigger});
+  mInput.Bind("delete", {MouseButton::Right});
+  mInput.Bind("delete", {GamepadButton::Y});
+
+  mTime.Initialize();
+}
+
+void App::Run() {
+  Init();
+
   // Noise noise(rng.NextUInt64(), Noise::Type::Perlin);
   // noise.SetFrequency(0.1f).SetFractalType(Noise::FractalType::FBm).SetFractalOctaves(2);
   PRNG rng(time(0));
@@ -209,10 +215,19 @@ void App::Run() {
     glm::vec3 velocity{};
   };
 
+  struct RigidBody {
+    PhysicsBodyID id;
+  };
+
+  struct Renderable {
+    MapleRenderer::MeshHndl mesh;
+    MapleRenderer::MaterialHndl material;
+  };
+
   std::vector<PhysicsBodyID> physicsBodies;
 
   auto shape = MaplePhysics::Box{};
-  for (size_t i = 0; i < 30000; i++) {
+  for (size_t i = 0; i < 10000; i++) {
     auto ent = mScene.CreateEntity();
     mScene.Add<Transform>(ent, Transform{glm::vec3(0)});
     auto dir = glm::normalize(glm::vec3(rng.NextFloat(-1), rng.NextFloat(), rng.NextFloat(-1)));
@@ -222,18 +237,21 @@ void App::Run() {
     auto angle = rng.NextFloat(0, glm::two_pi<float>());
     auto axis = glm::vec3(rng.NextFloat(-1.0f, 1.0f), rng.NextFloat(-1.0f, 1.0f), rng.NextFloat(-1.0f, 1.0f));
 
-    auto data = MaplePhysics::BodyInfo{.shape = shape,
-                                       .motionType = MaplePhysics::MotionType::Dynamic,
-                                       .position = pos,
-                                       .orientation = glm::normalize(glm::angleAxis(angle, axis)),
-                                       .restitution = 0.2f};
+    auto data = MaplePhysics::BodyInfo{
+      .entityID = static_cast<uint32_t>(ent),
+      .shape = shape,
+      .motionType = MaplePhysics::MotionType::Dynamic,
+      .position = pos,
+      .orientation = glm::normalize(glm::angleAxis(angle, axis)),
+      .restitution = 0.2f,
+    };
     auto rb = mPhysics.CreateRigidBody(data);
 
     physicsBodies.push_back(rb);
   }
 
-  auto data = MaplePhysics::BodyInfo{MaplePhysics::Plane{}, MaplePhysics::MotionType::Static};
-  auto rb = mPhysics.CreateRigidBody(data);
+  auto data = MaplePhysics::BodyInfo{0, MaplePhysics::Plane{}, MaplePhysics::MotionType::Static};
+  auto floorRB = mPhysics.CreateRigidBody(data);
   // physicsBodies.push_back(rb);
 
   std::vector<glm::mat4> instances;
@@ -281,11 +299,20 @@ void App::Run() {
 
     instances.push_back(glm::translate(glm::scale(glm::mat4(1.0f), glm::vec3(1000)), glm::vec3(0, -0.5, 0)));
 
-    auto rayResult = mPhysics.RaycastWNormal(mCam.GetPosition(), mCam.Forward(), 1000.0f);
-    if (rayResult != std::nullopt) {
-      instances.push_back(glm::scale(glm::translate(glm::mat4(1.0f), rayResult->position), glm::vec3(0.1f)));
-      auto normal = rayResult->normal;
-      MAPLE_DEBUG("{} {} {}", normal.x, normal.y, normal.z);
+    if (mInput.Value("click") > 0.5) {
+      auto rayResult = mPhysics.Raycast(mCam.GetPosition(), mCam.Forward(), 1000.0f);
+      if (rayResult != std::nullopt) {
+        instances.push_back(glm::scale(glm::translate(glm::mat4(1.0f), rayResult->position), glm::vec3(0.1f)));
+        auto overlaps = mPhysics.OverlapSphere({.radius = 5}, rayResult->position);
+        for (auto body : overlaps) {
+          instances.push_back(glm::scale(glm::translate(glm::mat4(1.0f), mPhysics.GetBodyPosition(body)), glm::vec3(2.0f)));
+          if (mInput.Value("delete") > 0.5) {
+            if (body == floorRB) continue;
+            mPhysics.DestroyRigidBody(body);
+            // mScene.DestroyEntity(static_cast<Entity>(mPhysics.GetBodyEntity(body)));
+          }
+        }
+      }
     }
 
     auto [frameBufferX, frameBufferY] = mWindow.GetFrameBufferSize();

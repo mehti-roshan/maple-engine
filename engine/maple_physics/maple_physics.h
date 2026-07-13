@@ -112,6 +112,7 @@ class MaplePhysics {
   enum MotionQuality { Discrete, Continuous };
 
   struct BodyInfo {
+    uint32_t entityID = 0;
     CollisionShape shape;
     MotionType motionType = Static;
     MotionQuality motionQuality = Discrete;
@@ -145,6 +146,8 @@ class MaplePhysics {
   PhysicsBodyID CreateRigidBody(BodyInfo& info);
   void DestroyRigidBody(PhysicsBodyID id);
 
+  uint64_t GetBodyEntity(PhysicsBodyID id);
+
   glm::vec3 GetBodyPosition(PhysicsBodyID id) const;
 
   glm::quat GetBodyRotation(PhysicsBodyID id) const;
@@ -169,7 +172,7 @@ class MaplePhysics {
   std::optional<RayCastResult> Raycast(const glm::vec3& origin, const glm::vec3& dir, float distance);
   std::optional<RayCastResultWithNormal> RaycastWNormal(const glm::vec3& origin, const glm::vec3& dir, float distance);
 
-  // TODO: implement a shape cast method
+  std::vector<PhysicsBodyID> OverlapSphere(Sphere sphere, const glm::vec3& origin);
 
  private:
   struct Impl;

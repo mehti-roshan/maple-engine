@@ -17,7 +17,7 @@ namespace maple {
 void Input::BeginFrame() {
   // Set previous to current
   for (auto& v : mKeys) v.Advance();
-  for (auto& v : mMouseKeys) v.Advance();
+  // for (auto& v : mMouseKeys) v.Advance();
   for (auto& v : mJoyStates) v.second.Advance();
   mMousePos.Advance();
   mMouseScroll.Advance();
@@ -87,8 +87,11 @@ float Input::Value(const std::string& name) const {
         if (state.current.buttons[static_cast<size_t>(*t)]) clamped += binding.positive ? 1.0f : -1.0f;
       }
     } else if (auto* t = std::get_if<GamepadAxis>(&binding.type)) {
+      bool leftOrRightTrig = *t == GamepadAxis::LeftTrigger || *t == GamepadAxis::RightTrigger;
+
       for (auto [id, state] : mJoyStates) {
         float v = state.current.axes[static_cast<size_t>(*t)];
+        if (leftOrRightTrig) v = v * 0.5f + 0.5f; // glfw axes are -1 -> 1, we want triggers to be 0 -> 1
         v *= binding.positive ? 1.0f : -1.0f;
         clamped += v;
       }
@@ -130,7 +133,7 @@ Input::JoystickState ConvertFromGlfwGamePad(const Input::JoystickState& glfw, fl
   v.buttons[static_cast<size_t>(GamepadButton::RightBumper)] = glfw.buttons[GLFW_GAMEPAD_BUTTON_RIGHT_BUMPER] != GLFW_RELEASE;
   v.buttons[static_cast<size_t>(GamepadButton::Back)] = glfw.buttons[GLFW_GAMEPAD_BUTTON_BACK] != GLFW_RELEASE;
   v.buttons[static_cast<size_t>(GamepadButton::Start)] = glfw.buttons[GLFW_GAMEPAD_BUTTON_START] != GLFW_RELEASE;
-  v.buttons[static_cast<size_t>(GamepadButton::Guide)] = glfw.buttons[GLFW_GAMEPAD_BUTTON_GUIDE] != GLFW_RELEASE;  
+  v.buttons[static_cast<size_t>(GamepadButton::Guide)] = glfw.buttons[GLFW_GAMEPAD_BUTTON_GUIDE] != GLFW_RELEASE;
   v.buttons[static_cast<size_t>(GamepadButton::LeftThumb)] = glfw.buttons[GLFW_GAMEPAD_BUTTON_LEFT_THUMB] != GLFW_RELEASE;
   v.buttons[static_cast<size_t>(GamepadButton::RightThumb)] = glfw.buttons[GLFW_GAMEPAD_BUTTON_RIGHT_THUMB] != GLFW_RELEASE;
   v.buttons[static_cast<size_t>(GamepadButton::DPadUp)] = glfw.buttons[GLFW_GAMEPAD_BUTTON_DPAD_UP] != GLFW_RELEASE;
@@ -154,13 +157,13 @@ void Input::OnCursorPos(double xpos, double ypos) { mMousePos.current = glm::vec
 void Input::OnMouseButtons(int glfwKey, int action, int mods) {
   MouseButton key;
   switch (glfwKey) {
-    case GLFW_MOUSE_BUTTON_1:
+    case GLFW_MOUSE_BUTTON_LEFT:
       key = MouseButton::Left;
       break;
-    case GLFW_MOUSE_BUTTON_2:
+    case GLFW_MOUSE_BUTTON_RIGHT:
       key = MouseButton::Right;
       break;
-    case GLFW_MOUSE_BUTTON_3:
+    case GLFW_MOUSE_BUTTON_MIDDLE:
       key = MouseButton::Middle;
       break;
     case GLFW_MOUSE_BUTTON_4:
@@ -181,6 +184,7 @@ void Input::OnMouseButtons(int glfwKey, int action, int mods) {
     default:
       return;  // Unknown mouse key
   }
+  mMouseKeys[static_cast<size_t>(key)].Advance();
   mMouseKeys[static_cast<size_t>(key)].current = action != GLFW_RELEASE;
 }
 
