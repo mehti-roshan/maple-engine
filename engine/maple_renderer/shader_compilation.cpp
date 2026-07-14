@@ -18,6 +18,8 @@ std::vector<uint8_t> compileSlangToSpirv(const std::string& code,
     if (SLANG_FAILED(slang::createGlobalSession(globalSession.writeRef()))) MAPLE_FATAL("failed to create slang global session");
   }
 
+  // TODO: on release enable shader optimizations
+
   slang::TargetDesc targetDesc = {};
   targetDesc.format = SLANG_SPIRV;
   targetDesc.profile = globalSession->findProfile("spirv_1_4");
