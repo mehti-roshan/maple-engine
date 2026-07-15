@@ -50,6 +50,16 @@ class MapleScene {
 
   void Clear() { mRegistry.clear(); }
 
+  template<typename T>
+  auto OnCreate() {
+    return mRegistry.on_construct<T>();
+  }
+
+  template<typename T>
+  auto OnDestroy() {
+    return mRegistry.on_destroy<T>();
+  }
+
  private:
   entt::registry mRegistry;
 };

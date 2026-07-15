@@ -17,6 +17,7 @@
 #include "maple_renderer.h"
 #include "maple_renderer/material_builder_data.h"
 #include "maple_renderer/render_graph.h"
+#include "maple_scene.h"
 #include "maple_window/maple_window.h"
 
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
@@ -30,7 +31,27 @@
 
 namespace maple {
 
+static App* sApp = nullptr;
+
+void App::OnDestroyPhysicsBody(entt::registry& registry, entt::entity entity) {
+  sApp->mPhysics.DestroyRigidBody(registry.get<PhysicsBody>(entity).id);
+}
+void App::OnCreateRenderable(entt::registry& registry, entt::entity entity) {
+  auto e = registry.get<Renderable>(entity);
+  sApp->mRenderer.AddMeshRef(e.mesh);
+  sApp->mRenderer.AddMaterialRef(e.material);
+  for (auto& tex : e.textures) sApp->mRenderer.AddTextureRef(tex);
+}
+void App::OnDestroyRenderable(entt::registry& registry, entt::entity entity) {
+  auto e = registry.get<Renderable>(entity);
+  sApp->mRenderer.RemoveMeshRef(e.mesh);
+  sApp->mRenderer.RemoveMaterialRef(e.material);
+  for (auto& tex : e.textures) sApp->mRenderer.RemoveTextureRef(tex);
+}
+
 void App::Init() {
+  sApp = this;
+
   logging::Log::init();
   MAPLE_INFO("Initializing...");
 
@@ -160,13 +181,13 @@ void App::Init() {
   if (!format.has_value()) MAPLE_FATAL("failed to find suitable color format");
 
   {
-    auto img = MapleAsset::LoadImage("assets/textures/" + mTex1);
-    mRenderer.CreateTexture(mTex1, img.size, img.bytes, *format);
+    auto img = MapleAsset::LoadImage("assets/textures/texture.jpg");
+    mTex1 = mRenderer.CreateTexture(img.size, img.bytes, *format);
   }
 
   {
-    auto img = MapleAsset::LoadImage("assets/textures/" + mTex2);
-    mRenderer.CreateTexture(mTex2, img.size, img.bytes, *format);
+    auto img = MapleAsset::LoadImage("assets/textures/viking_room.png");
+    mTex2 = mRenderer.CreateTexture(img.size, img.bytes, *format);
   }
 
   mInput.Bind("exit", {Key::Escape});
@@ -198,6 +219,12 @@ void App::Init() {
   mInput.Bind("delete", {GamepadButton::Y});
 
   mTime.Initialize();
+
+  mScene.OnDestroy<PhysicsBody>().connect<&App::OnDestroyPhysicsBody>();
+
+  mScene.OnCreate<Renderable>().connect<&App::OnCreateRenderable>();
+
+  mScene.OnDestroy<Renderable>().connect<&App::OnDestroyRenderable>();
 }
 
 void App::Run() {
@@ -207,31 +234,13 @@ void App::Run() {
   // noise.SetFrequency(0.1f).SetFractalType(Noise::FractalType::FBm).SetFractalOctaves(2);
   PRNG rng(time(0));
 
-  struct Transform {
-    glm::vec3 pos{};
-  };
-
-  struct Velocity {
-    glm::vec3 velocity{};
-  };
-
-  struct RigidBody {
-    PhysicsBodyID id;
-  };
-
-  struct Renderable {
-    MapleRenderer::MeshHndl mesh;
-    MapleRenderer::MaterialHndl material;
-  };
-
-  std::vector<PhysicsBodyID> physicsBodies;
+  std::vector<TextureHndl> textureHandles = {mTex1};
 
   auto shape = MaplePhysics::Box{};
-  for (size_t i = 0; i < 10000; i++) {
+  for (size_t i = 0; i < 1; i++) {
     auto ent = mScene.CreateEntity();
-    mScene.Add<Transform>(ent, Transform{glm::vec3(0)});
     auto dir = glm::normalize(glm::vec3(rng.NextFloat(-1), rng.NextFloat(), rng.NextFloat(-1)));
-    auto speed = rng.NextFloat() * 500.0f + 50.0f;
+    auto speed = rng.NextFloat() * 50.0f + 5.0f;
     auto pos = dir * speed;
 
     auto angle = rng.NextFloat(0, glm::two_pi<float>());
@@ -240,19 +249,23 @@ void App::Run() {
     auto data = MaplePhysics::BodyInfo{
       .entityID = static_cast<uint32_t>(ent),
       .shape = shape,
-      .motionType = MaplePhysics::MotionType::Dynamic,
+      .motionType = MaplePhysics::MotionType::Static,
       .position = pos,
       .orientation = glm::normalize(glm::angleAxis(angle, axis)),
       .restitution = 0.2f,
     };
     auto rb = mPhysics.CreateRigidBody(data);
 
-    physicsBodies.push_back(rb);
+    mScene.Add<PhysicsBody>(ent, PhysicsBody{.id = rb});
+    mScene.Add<Renderable>(ent, Renderable{.mesh = mMesh, .material = mMaterial, .textures = textureHandles});
   }
 
-  auto data = MaplePhysics::BodyInfo{0, MaplePhysics::Plane{}, MaplePhysics::MotionType::Static};
-  auto floorRB = mPhysics.CreateRigidBody(data);
-  // physicsBodies.push_back(rb);
+  // auto data = MaplePhysics::BodyInfo{0, MaplePhysics::Plane{}, MaplePhysics::MotionType::Static};
+  // auto floorRB = mPhysics.CreateRigidBody(data);
+  // auto floor = mScene.CreateEntity();
+  // mScene.Add<PhysicsBody>(floor, PhysicsBody{.id = floorRB});
+  // mScene.Add<Renderable>(floor, Renderable{.mesh = mMesh, .material = mMaterial, .textures = textureHandles});
+  // mScene.Add<Scale>(floor, Scale{glm::vec3(2)});
 
   std::vector<glm::mat4> instances;
 
@@ -260,6 +273,7 @@ void App::Run() {
   float remainingPhysicsTime = 0.0f;
 
   while (!mWindow.ShouldClose()) {
+    instances.clear();
     mTime.BeginFrame();
     mInput.BeginFrame();
     mWindow.PollEvents();
@@ -284,21 +298,6 @@ void App::Run() {
     mCam.Pitch(look.y);
     mCam.Roll(mInput.Value("roll") * rollSpeed * mTime.DeltaTime());
 
-    remainingPhysicsTime += mTime.DeltaTime();
-    while (remainingPhysicsTime >= physicsDeltaTime) {
-      remainingPhysicsTime -= physicsDeltaTime;
-      mPhysics.Update(physicsDeltaTime);
-    }
-
-    instances.clear();
-    for (auto id : physicsBodies) {
-      glm::mat4 rotation = glm::mat4_cast(mPhysics.GetBodyRotation(id));
-      glm::mat4 translation = glm::translate(glm::mat4(1.0f), mPhysics.GetBodyPosition(id));
-      instances.push_back(translation * rotation);
-    }
-
-    instances.push_back(glm::translate(glm::scale(glm::mat4(1.0f), glm::vec3(1000)), glm::vec3(0, -0.5, 0)));
-
     if (mInput.Value("click") > 0.5) {
       auto rayResult = mPhysics.Raycast(mCam.GetPosition(), mCam.Forward(), 1000.0f);
       if (rayResult != std::nullopt) {
@@ -306,13 +305,28 @@ void App::Run() {
         auto overlaps = mPhysics.OverlapSphere({.radius = 5}, rayResult->position);
         for (auto body : overlaps) {
           instances.push_back(glm::scale(glm::translate(glm::mat4(1.0f), mPhysics.GetBodyPosition(body)), glm::vec3(2.0f)));
-          if (mInput.Value("delete") > 0.5) {
-            if (body == floorRB) continue;
-            mPhysics.DestroyRigidBody(body);
-            // mScene.DestroyEntity(static_cast<Entity>(mPhysics.GetBodyEntity(body)));
-          }
+          if (mInput.Value("delete") < 0.5) continue;
+          auto ent = static_cast<Entity>(mPhysics.GetBodyEntity(body));
+          // if (ent == floor) continue;
+          mScene.DestroyEntity(ent);
         }
       }
+    }
+
+    remainingPhysicsTime += mTime.DeltaTime();
+    while (remainingPhysicsTime >= physicsDeltaTime) {
+      remainingPhysicsTime -= physicsDeltaTime;
+      mPhysics.Update(physicsDeltaTime);
+    }
+
+    for (auto ent : mScene.View<Renderable>()) {
+      if (!mScene.Has<PhysicsBody>(ent)) MAPLE_FATAL("renderable did not have physics body");
+      auto physId = mScene.Get<PhysicsBody>(ent).id;
+      glm::mat4 rotation = glm::mat4_cast(mPhysics.GetBodyRotation(physId));
+      glm::mat4 translation = glm::translate(glm::mat4(1.0f), mPhysics.GetBodyPosition(physId));
+      glm::mat4 scale = mScene.Has<Scale>(ent) ? glm::scale(glm::mat4(1.0f), mScene.Get<Scale>(ent).scale) : glm::mat4(1.0f);
+      if (mScene.Has<Scale>(ent)) MAPLE_DEBUG("has scale");
+      instances.push_back(translation * rotation * scale);
     }
 
     auto [frameBufferX, frameBufferY] = mWindow.GetFrameBufferSize();
@@ -322,7 +336,7 @@ void App::Run() {
       .time = static_cast<float>(mTime.TimeSinceStart()),
     };
 
-    std::vector<std::string> usedResources = {mTex1};
+    std::vector<std::variant<const std::string, TextureHndl>> usedResources = {mTex1};
     std::array meshDraws = {MapleRenderer::MeshDraw{mMesh, instances, usedResources}};
 
     std::array materialDraws = {MapleRenderer::MaterialDraw{.material = mMaterial, .meshes = meshDraws}};

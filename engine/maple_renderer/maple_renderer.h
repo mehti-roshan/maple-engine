@@ -4,6 +4,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <variant>
 #include <vector>
 
 #include "enums.h"
@@ -26,14 +27,22 @@ class MapleRenderer {
 
   using MeshHndl = uint32_t;
   using MaterialHndl = uint32_t;
-  using RenderTargetHndl = uint32_t;
+  using TextureHndl = uint32_t;
 
+  [[nodiscard]]
   MeshHndl CreateMesh(const MeshData& data);
-  void DestroyMesh(MeshHndl handle);
+  void AddMeshRef(MeshHndl);
+  void RemoveMeshRef(MeshHndl);
+
+  [[nodiscard]]
   MaterialHndl CreateMaterial(const std::string& shaderCode, const std::string& shaderFileName, const MaterialBuilderData& data);
-  void DestroyMaterial(MaterialHndl handle);
-  void CreateTexture(const std::string& name, glm::uvec2 dimensions, std::span<const uint8_t> bytes, Format format);
-  void DestroyTexture(const std::string& name);
+  void AddMaterialRef(MaterialHndl);
+  void RemoveMaterialRef(MaterialHndl);
+
+  [[nodiscard]]
+  TextureHndl CreateTexture(glm::uvec2 dimensions, std::span<const uint8_t> bytes, Format format);
+  void AddTextureRef(TextureHndl hndl);
+  void RemoveTextureRef(TextureHndl hndl);
 
   std::optional<Format> FindFirstSupportedTextureFormat(std::span<const Format> formats) const;
   std::optional<Format> FindFirstSupportedDepthAttachmentFormat(std::span<const Format> formats) const;
@@ -47,7 +56,7 @@ class MapleRenderer {
   struct MeshDraw {
     MeshHndl mesh;
     std::span<const glm::mat4> instanceData;
-    std::span<const std::string> usedResources;
+    std::span<std::variant<const std::string, TextureHndl>> usedResources; // string means sampling a render target, otherwise a regular texture
   };
 
   struct MaterialDraw {

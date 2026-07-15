@@ -13,6 +13,7 @@
 #include <string>
 #include <unordered_map>
 #include <utility>
+#include <variant>
 #include <vulkan/vulkan_raii.hpp>
 
 #include "enums.h"
@@ -51,13 +52,15 @@ struct DrawPush {
   uint32_t instanceBufferIndex;   // byte offset into global instance buffer
 };
 
+using RenderTargetHndl = uint32_t;
+
 struct MapleRenderer::Impl {
   VkRendererCtx mCtx;
   Pool<vkm::Mesh> mMeshPool;
   Pool<Material> mMaterialPool;
 
-  // TODO: merge render target with general textures
-  Pool<RenderTarget> mRenderTargets;  // slots directly map to texture slot
+  Pool<RenderTarget> mRenderTargets;                     // slots directly map to texture slot
+  Pool<std::pair<RenderTarget, uint32_t>> mTexturePool;  // RenderTarget and reference counter
   std::unordered_map<std::string, RenderTargetHndl> mRenderTargetMap;
 
   vkm::PipelineLayout mGlobalPipelineLayout;
@@ -108,19 +111,33 @@ MapleRenderer::MeshHndl MapleRenderer::CreateMesh(const MeshData& data) {
   return val;
 }
 
-void MapleRenderer::DestroyMesh(MeshHndl handle) { impl->mMeshPool.Remove(handle); }
+void MapleRenderer::AddMeshRef(MeshHndl hndl) { impl->mMeshPool.Get(hndl).AddRef(); }
+void MapleRenderer::RemoveMeshRef(MeshHndl hndl) {
+  auto count = impl->mMeshPool.Get(hndl).RemoveRef();
+  if (count == 0) {
+    impl->mCtx.mDevice.device.waitIdle();
+    impl->mMeshPool.Remove(hndl);
+  }
+}
 
 MapleRenderer::MaterialHndl MapleRenderer::CreateMaterial(const std::string& shaderCode,
                                                           const std::string& shaderFileName,
                                                           const MaterialBuilderData& data) {
   MaterialBuilderData compiledData = data;
   compiledData.shaderCode = compileSlangToSpirv(shaderCode, shaderFileName, data.vertEntryFuncName, data.fragEntryFuncName);
-  return impl->mMaterialPool.Add({.data = compiledData});
+  return impl->mMaterialPool.Add(Material(compiledData));
 }
 
-void MapleRenderer::DestroyMaterial(MaterialHndl handle) { impl->mMaterialPool.Remove(handle); }
+void MapleRenderer::AddMaterialRef(MaterialHndl hndl) { impl->mMaterialPool.Get(hndl).AddRef(); }
+void MapleRenderer::RemoveMaterialRef(MaterialHndl hndl) {
+  auto count = impl->mMaterialPool.Get(hndl).RemoveRef();
+  if (count == 0) {
+    impl->mCtx.mDevice.device.waitIdle();
+    impl->mMaterialPool.Remove(hndl);
+  }
+}
 
-void MapleRenderer::CreateTexture(const std::string& name, glm::uvec2 dimensions, std::span<const uint8_t> bytes, Format format) {
+MapleRenderer::TextureHndl MapleRenderer::CreateTexture(glm::uvec2 dimensions, std::span<const uint8_t> bytes, Format format) {
   auto& ctx = impl->mCtx;
 
   vk::ImageUsageFlags usage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst;
@@ -141,28 +158,29 @@ void MapleRenderer::CreateTexture(const std::string& name, glm::uvec2 dimensions
   img.TransitionLayout(cmd, vk::ImageLayout::eTransferDstOptimal, ToVulkan(ImageLayout::ShaderReadOnlyOptimal));
   ctx.endSingleTimeCommands(cmd);
 
-  auto hndl = impl->mRenderTargets.Add({
-    .info =
-      {
-        .sizeType = SizeType::Absolute,
-        .size = dimensions,
-        .format = format,
-      },
-    .target = std::move(img),
-  });
+  auto hndl = impl->mTexturePool.Add(std::make_pair(
+    RenderTarget{
+      .info =
+        {
+          .sizeType = SizeType::Absolute,
+          .size = dimensions,
+          .format = format,
+        },
+      .target = std::move(img),
+    },
+    0));
 
-  impl->mRenderTargetMap[name] = hndl;
+  return hndl;
 }
 
-void MapleRenderer::DestroyTexture(const std::string& name) {
-  auto it = impl->mRenderTargetMap.find(name);
-
-  MAPLE_ASSERT(it != impl->mRenderTargetMap.end(), "failed to find texture '{}' in DestroyTexture", name);
-  auto hndl = it->second;
-  impl->mRenderTargetMap.erase(it);
-
-  MAPLE_ASSERT(impl->mRenderTargets.IsValid(hndl), "texture handle for '{}' was not valid", name);
-  impl->mRenderTargets.Remove(hndl);
+void MapleRenderer::AddTextureRef(TextureHndl hndl) { impl->mTexturePool.Get(hndl).second++; }
+void MapleRenderer::RemoveTextureRef(TextureHndl hndl) {
+  auto& count = impl->mTexturePool.Get(hndl).second;
+  count--;
+  if (count == 0) {
+    impl->mCtx.mDevice.device.waitIdle();
+    impl->mTexturePool.Remove(hndl);
+  }
 }
 
 // FrameIdx, SwapChainIdx
@@ -187,7 +205,7 @@ std::optional<std::pair<uint8_t, uint32_t>> acquireFrameIdxAndSwapChainIdx(const
 
 void CreateMissingAttachments(const std::vector<RenderGraph::NameAndAttachment>& requiredAttachments,
                               Pool<RenderTarget>& renderTargets,
-                              std::unordered_map<std::string, MapleRenderer::RenderTargetHndl>& map,
+                              std::unordered_map<std::string, RenderTargetHndl>& map,
                               VkRendererCtx& ctx) {
   glm::uvec2 swapChainSize(ctx.mSwapChain.extent.width, ctx.mSwapChain.extent.height);
 
@@ -218,8 +236,11 @@ void CreateMissingAttachments(const std::vector<RenderGraph::NameAndAttachment>&
 
 void MapleRenderer::DrawFrame(const UBO& frameUBO, const RenderGraph::CompileResult& compiledRenderGraph, std::span<const PassDraw> passDraws) {
   auto& ctx = impl->mCtx;
+  auto& renderTargets = impl->mRenderTargets;
+  auto& texturePool = impl->mTexturePool;
+
   // TODO: manage and remove unused attachments
-  CreateMissingAttachments(compiledRenderGraph.attachments, impl->mRenderTargets, impl->mRenderTargetMap, ctx);
+  CreateMissingAttachments(compiledRenderGraph.attachments, renderTargets, impl->mRenderTargetMap, ctx);
 
   auto result = acquireFrameIdxAndSwapChainIdx(ctx);
   if (!result.has_value()) return;  // timeout
@@ -230,24 +251,55 @@ void MapleRenderer::DrawFrame(const UBO& frameUBO, const RenderGraph::CompileRes
   impl->mGlobalsUniform[frameIdx].Upload(&frameUBO, sizeof(frameUBO));
 
   // TODO: optimize
-  uint32_t i = 0;
-  uint32_t updated = 0;
-  uint32_t activeCount = impl->mRenderTargets.ActiveCount();
-  while (updated != activeCount) {
-    if (!impl->mRenderTargets.IsValid(i)) continue;
+  uint32_t textureArrayOffset = 0;
+  {
+    uint32_t activeCount = renderTargets.ActiveCount();
+    while (textureArrayOffset != activeCount) {
+      if (!renderTargets.IsValid(textureArrayOffset)) {
+        textureArrayOffset++;
+        continue;
+      }
 
-    vk::DescriptorImageInfo imgInfo{};
-    imgInfo.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
-    imgInfo.imageView = impl->mRenderTargets.Get(i).target.view;
-    imgInfo.sampler = impl->mDefaultSampler.sampler;
+      vk::DescriptorImageInfo imgInfo{};
+      imgInfo.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+      imgInfo.imageView = renderTargets.Get(textureArrayOffset).target.view;
+      imgInfo.sampler = impl->mDefaultSampler.sampler;
 
-    vk::WriteDescriptorSet write{};
-    write.dstSet = *impl->mGlobalDescriptorSets.sets[frameIdx], write.dstBinding = 3, write.dstArrayElement = i, write.descriptorCount = 1,
-    write.descriptorType = vk::DescriptorType::eCombinedImageSampler, write.pImageInfo = &imgInfo,
+      vk::WriteDescriptorSet write{};
+      write.dstSet = *impl->mGlobalDescriptorSets.sets[frameIdx], write.dstBinding = 3, write.dstArrayElement = textureArrayOffset,
+      write.descriptorCount = 1, write.descriptorType = vk::DescriptorType::eCombinedImageSampler, write.pImageInfo = &imgInfo,
 
-    ctx.mDevice.device.updateDescriptorSets(write, {});
-    updated++;
-    i++;
+      ctx.mDevice.device.updateDescriptorSets(write, {});
+      textureArrayOffset++;
+    }
+  }
+
+  std::unordered_map<TextureHndl, uint32_t> textureSlotMap;
+
+  {
+    uint32_t updated = 0;
+    uint32_t activeCount = texturePool.ActiveCount();
+    while (updated != activeCount) {
+      if (!texturePool.IsValid(updated)) {
+        updated++;
+        continue;
+      }
+
+      uint32_t arrayIdx = textureArrayOffset + updated;
+      textureSlotMap[updated] = arrayIdx;
+
+      vk::DescriptorImageInfo imgInfo{};
+      imgInfo.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+      imgInfo.imageView = texturePool.Get(updated).first.target.view;
+      imgInfo.sampler = impl->mDefaultSampler.sampler;
+
+      vk::WriteDescriptorSet write{};
+      write.dstSet = *impl->mGlobalDescriptorSets.sets[frameIdx], write.dstBinding = 3, write.dstArrayElement = arrayIdx, write.descriptorCount = 1,
+      write.descriptorType = vk::DescriptorType::eCombinedImageSampler, write.pImageInfo = &imgInfo,
+
+      ctx.mDevice.device.updateDescriptorSets(write, {});
+      updated++;
+    }
   }
 
   cmd.reset();
@@ -276,7 +328,7 @@ void MapleRenderer::DrawFrame(const UBO& frameUBO, const RenderGraph::CompileRes
       auto getImgAndAspect = [&](const std::string& name) -> std::pair<vk::Image, vk::ImageAspectFlags> {
         if (name == RenderGraph::SWAPCHAIN_TARGET_NAME)
           return std::make_pair(ctx.mSwapChain.images[swapChainImageIdx].img, vk::ImageAspectFlagBits::eColor);
-        auto& v = impl->mRenderTargets.Get(impl->mRenderTargetMap.at(transition.resource));
+        auto& v = renderTargets.Get(impl->mRenderTargetMap.at(transition.resource));
         return std::make_pair(*v.target.img, GetImageAspectFlags(v.info.format));
       };
       auto imgAndAspectFlags = getImgAndAspect(transition.resource);
@@ -308,7 +360,7 @@ void MapleRenderer::DrawFrame(const UBO& frameUBO, const RenderGraph::CompileRes
 
     auto getImageView = [&](const std::string& name) -> vk::ImageView {
       if (name == RenderGraph::SWAPCHAIN_TARGET_NAME) return ctx.mSwapChain.images[swapChainImageIdx].view;
-      return impl->mRenderTargets.Get(impl->mRenderTargetMap.at(name)).target.view;
+      return renderTargets.Get(impl->mRenderTargetMap.at(name)).target.view;
     };
 
     std::optional<glm::uvec2> renderingArea = std::nullopt;
@@ -375,11 +427,12 @@ void MapleRenderer::DrawFrame(const UBO& frameUBO, const RenderGraph::CompileRes
       }
 
       for (auto& materialDraw : *materialDraws) {
+        MAPLE_ASSERT(impl->mMaterialPool.IsValid(materialDraw.material), "used invalid material handle in renderer");
         auto& mat = impl->mMaterialPool.Get(materialDraw.material);
         // TODO: assert pass.pipelineType == materialDraw.material's pipeline type
 
-        if (!mat.pipeline.has_value()) {
-          mat.pipeline = vkm::Pipeline(vkm::Pipeline::CreateInfo{
+        if (!mat.Pipeline().has_value()) {
+          mat.Pipeline() = vkm::Pipeline(vkm::Pipeline::CreateInfo{
             .device = ctx.mDevice.device,
             .layout = impl->mGlobalPipelineLayout,
             .formats =
@@ -387,11 +440,11 @@ void MapleRenderer::DrawFrame(const UBO& frameUBO, const RenderGraph::CompileRes
                 .colorFormats = outputColorFormats,
                 .depthFormat = outputDepthFormat,
               },
-            .materialData = mat.data,
+            .materialData = mat.Data(),
           });
         }
 
-        cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, mat.pipeline.value().GetPipeline());
+        cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, mat.Pipeline().value().GetPipeline());
         cmd.setViewport(0, vk::Viewport{0.0f, 0.0f, static_cast<float>(renderingArea->x), static_cast<float>(renderingArea->y), 0.0f, 1.0f});
         vk::Rect2D scissor{vk::Offset2D{0, 0}, vk::Extent2D{.width = renderingArea->x, .height = renderingArea->y}};
         cmd.setScissor(0, {scissor});
@@ -401,16 +454,27 @@ void MapleRenderer::DrawFrame(const UBO& frameUBO, const RenderGraph::CompileRes
 
           uint32_t materialBufferOffset = materialBuffer.size();
           for (auto& usedResource : meshDraw.usedResources) {
-            MAPLE_ASSERT(usedResource != RenderGraph::SWAPCHAIN_TARGET_NAME, "cannot use swapchain as sampled attachment");
-            auto it = impl->mRenderTargetMap.find(usedResource);
-            MAPLE_ASSERT(it != impl->mRenderTargetMap.end(), "failed to find meshDraw resource '{}'", usedResource);
-            RenderTargetHndl hndl = it->second;
-            MAPLE_ASSERT(impl->mRenderTargets.IsValid(hndl), "invalid meshDraw resource '{}'", usedResource);
+            uint32_t slot = 0;
+            uint32_t slotTypeSize = sizeof(slot);
 
-            auto hndlNumBytes = sizeof(hndl);
+            if (auto* res = std::get_if<const std::string>(&usedResource)) {
+              MAPLE_ASSERT(*res != RenderGraph::SWAPCHAIN_TARGET_NAME, "cannot use swapchain as sampled attachment");
+              auto it = impl->mRenderTargetMap.find(*res);
+              MAPLE_ASSERT(it != impl->mRenderTargetMap.end(), "failed to find meshDraw resource attachment '{}'", *res);
+              slot = it->second;
+              MAPLE_ASSERT(renderTargets.IsValid(slot), "invalid meshDraw resource attachment '{}'", *res);
+            } else if (auto* res = std::get_if<TextureHndl>(&usedResource)) {
+              // TODO
+              auto it = textureSlotMap.find(*res);
+              MAPLE_ASSERT(it != textureSlotMap.end(), "failed to find meshDraw resource texture '{}'", *res);
+              slot = it->second;
+            } else {
+              MAPLE_FATAL("unknown mesh draw resource");
+            }
+
             size_t offset = materialBuffer.size() * sizeof(decltype(materialBuffer)::value_type);
-            materialBuffer.resize(offset + hndlNumBytes);
-            std::memcpy(materialBuffer.data() + offset, &hndl, hndlNumBytes);
+            materialBuffer.resize(offset + slotTypeSize);
+            std::memcpy(materialBuffer.data() + offset, &slot, slotTypeSize);
           }
 
           VkBufferDeviceAddressInfo info{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO_KHR};
@@ -476,7 +540,6 @@ void MapleRenderer::DrawFrame(const UBO& frameUBO, const RenderGraph::CompileRes
     glm::uvec2 swapChainSize(ctx.mSwapChain.extent.width, ctx.mSwapChain.extent.height);
     auto multiplySwapChain = [&](glm::vec2 v) { return glm::uvec2(v.x * swapChainSize.x, v.y * swapChainSize.y); };
 
-    auto& renderTargets = impl->mRenderTargets;
     // TODO: optimize
     for (uint32_t i = 0; i < renderTargets.Capacity(); i++) {
       if (!renderTargets.IsValid(i)) continue;

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include "mesh_data.h"
 #include "vkm/vkm_allocator.h"
 
@@ -23,9 +24,14 @@ class Mesh {
 
   static vk::IndexType GetVkIndexType() { return vk::IndexType::eUint32; }
 
+  uint32_t AddRef() { return ++numRefs; }
+  uint32_t RemoveRef() { return --numRefs; }
+  uint32_t GetRefs() const { return numRefs; }
+
  private:
   uint32_t numVerts = 0;
   uint32_t numIndices = 0;
   uint32_t indexBufferOffset = 0;
+  uint32_t numRefs = 0;
 };
 }  // namespace vkm
