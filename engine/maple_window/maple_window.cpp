@@ -10,6 +10,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -104,6 +105,7 @@ void MapleWindow::PollEvents() const {
 }
 
 void MapleWindow::DispatchEvent(const SDL_Event& e) const {
+  static std::optional<std::pair<int32_t, int32_t>> mouseCoords = std::nullopt;
   switch (e.type) {
     case SDL_EVENT_QUIT:
       impl->shouldClose = true;
@@ -143,8 +145,16 @@ void MapleWindow::DispatchEvent(const SDL_Event& e) const {
     }
 
     case SDL_EVENT_MOUSE_MOTION: {
+      if (!mouseCoords.has_value()) {
+        mouseCoords = std::make_pair(0, 0);
+        break;
+      } else {
+        mouseCoords->first += e.motion.xrel;
+        mouseCoords->second += e.motion.yrel;
+      }
+
       for (auto& [_, cb] : impl->cursorPosCallbacks) {
-        cb(e.motion.x, e.motion.y);
+        cb(mouseCoords->first, mouseCoords->second);
       }
 
       break;
