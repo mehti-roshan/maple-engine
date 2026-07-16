@@ -57,19 +57,18 @@ void App::Init() {
 
   mWindow = MapleWindow({.title = "Maple"});
 
-  if (mWindow.RawMouseMotionSupported()) mWindow.SetRawMouseMotion(true);
   mWindow.LockCursor();
   mWindow.AddFramebufferSizeCallback([&](int32_t width, int32_t height) { mRenderer.SetFrameBufferResized(); });
 
   mWindow.AddCursorPosCallback([&](auto a, auto b) { mInput.OnCursorPos(a, b); });
   mWindow.AddScrollCallback([&](auto a, auto b) { mInput.OnMouseScroll(a, b); });
-  mWindow.AddKeyCallback([&](auto a, auto b, auto c, auto d) { mInput.OnKey(a, b, c, d); });
-  mWindow.AddMouseButtonCallback([&](auto a, auto b, auto c) { mInput.OnMouseButtons(a, b, c); });
-  mWindow.AddJoySticksCallback([&](const auto& joyStates) {
-    std::vector<std::pair<int32_t, Input::JoystickState>> cpy;
+  mWindow.AddKeyCallback([&](auto a, auto b) { mInput.OnKey(std::bit_cast<InputKey>(a), b); });
+  mWindow.AddMouseButtonCallback([&](auto a, auto b) { mInput.OnMouseButtons(std::bit_cast<InputMouseButton>(a), b); });
+  mWindow.AddGamePadsCallback([&](const auto& joyStates) {
+    std::vector<std::pair<int32_t, Input::GamePadState>> cpy;
     cpy.reserve(joyStates.size());
     for (const auto& v : joyStates) {
-      cpy.push_back(std::make_pair(v.first, std::bit_cast<Input::JoystickState>(v.second)));
+      cpy.push_back(std::make_pair(v.first, std::bit_cast<Input::GamePadState>(v.second)));
     }
     mInput.OnJoySticks(cpy);
   });
@@ -190,33 +189,33 @@ void App::Init() {
     mTex2 = mRenderer.CreateTexture(img.size, img.bytes, *format);
   }
 
-  mInput.Bind("exit", {Key::Escape});
-  mInput.Bind("exit", {GamepadButton::Start});
+  mInput.Bind("exit", {InputKey::Escape});
+  mInput.Bind("exit", {InputGamePadButton::Start});
 
-  mInput.Bind("forward", {Key::W});
-  mInput.Bind("forward", {Key::S, false});
-  mInput.Bind("sideways", {Key::D});
-  mInput.Bind("sideways", {Key::A, false});
-  mInput.Bind("upward", {Key::Space});
-  mInput.Bind("upward", {Key::LeftControl, false});
+  mInput.Bind("forward", {InputKey::W});
+  mInput.Bind("forward", {InputKey::S, false});
+  mInput.Bind("sideways", {InputKey::D});
+  mInput.Bind("sideways", {InputKey::A, false});
+  mInput.Bind("upward", {InputKey::Space});
+  mInput.Bind("upward", {InputKey::LeftControl, false});
 
-  mInput.Bind("roll", {Key::E});
-  mInput.Bind("roll", {Key::Q, false});
+  mInput.Bind("roll", {InputKey::E});
+  mInput.Bind("roll", {InputKey::Q, false});
 
-  mInput.Bind("forward", {GamepadAxis::LeftY, false});
-  mInput.Bind("sideways", {GamepadAxis::LeftX});
-  mInput.Bind("upward", {GamepadButton::A});
-  mInput.Bind("upward", {GamepadButton::B, false});
+  mInput.Bind("forward", {InputGamePadAxis::LeftY, false});
+  mInput.Bind("sideways", {InputGamePadAxis::LeftX});
+  mInput.Bind("upward", {InputGamePadButton::A});
+  mInput.Bind("upward", {InputGamePadButton::B, false});
 
-  mInput.Bind("look_vertical", {GamepadAxis::RightY, false});
-  mInput.Bind("look_horizontal", {GamepadAxis::RightX, false});
-  mInput.Bind("roll", {GamepadButton::RightBumper});
-  mInput.Bind("roll", {GamepadButton::LeftBumper, false});
+  mInput.Bind("look_vertical", {InputGamePadAxis::RightY, false});
+  mInput.Bind("look_horizontal", {InputGamePadAxis::RightX, false});
+  mInput.Bind("roll", {InputGamePadButton::RightBumper});
+  mInput.Bind("roll", {InputGamePadButton::LeftBumper, false});
 
-  mInput.Bind("click", {MouseButton::Left});
-  mInput.Bind("click", {GamepadAxis::RightTrigger});
-  mInput.Bind("delete", {MouseButton::Right});
-  mInput.Bind("delete", {GamepadButton::Y});
+  mInput.Bind("click", {InputMouseButton::Left});
+  mInput.Bind("click", {InputGamePadAxis::RightTrigger});
+  mInput.Bind("delete", {InputMouseButton::Right});
+  mInput.Bind("delete", {InputGamePadButton::Y});
 
   mTime.Initialize();
 
@@ -237,10 +236,10 @@ void App::Run() {
   std::vector<TextureHndl> textureHandles = {mTex1};
 
   auto shape = MaplePhysics::Box{};
-  for (size_t i = 0; i < 1; i++) {
+  for (size_t i = 0; i < 2500; i++) {
     auto ent = mScene.CreateEntity();
     auto dir = glm::normalize(glm::vec3(rng.NextFloat(-1), rng.NextFloat(), rng.NextFloat(-1)));
-    auto speed = rng.NextFloat() * 50.0f + 5.0f;
+    auto speed = rng.NextFloat() * 500.0f + 50.0f;
     auto pos = dir * speed;
 
     auto angle = rng.NextFloat(0, glm::two_pi<float>());
@@ -249,7 +248,7 @@ void App::Run() {
     auto data = MaplePhysics::BodyInfo{
       .entityID = static_cast<uint32_t>(ent),
       .shape = shape,
-      .motionType = MaplePhysics::MotionType::Static,
+      .motionType = MaplePhysics::MotionType::Dynamic,
       .position = pos,
       .orientation = glm::normalize(glm::angleAxis(angle, axis)),
       .restitution = 0.2f,
@@ -260,12 +259,13 @@ void App::Run() {
     mScene.Add<Renderable>(ent, Renderable{.mesh = mMesh, .material = mMaterial, .textures = textureHandles});
   }
 
-  // auto data = MaplePhysics::BodyInfo{0, MaplePhysics::Plane{}, MaplePhysics::MotionType::Static};
-  // auto floorRB = mPhysics.CreateRigidBody(data);
-  // auto floor = mScene.CreateEntity();
-  // mScene.Add<PhysicsBody>(floor, PhysicsBody{.id = floorRB});
-  // mScene.Add<Renderable>(floor, Renderable{.mesh = mMesh, .material = mMaterial, .textures = textureHandles});
-  // mScene.Add<Scale>(floor, Scale{glm::vec3(2)});
+  auto floor = mScene.CreateEntity();
+  auto data = MaplePhysics::BodyInfo{static_cast<uint32_t>(floor), MaplePhysics::Plane{.distance = -500}, MaplePhysics::MotionType::Static};
+  data.position = glm::vec3(0, -500, 0);
+  auto floorRB = mPhysics.CreateRigidBody(data);
+  mScene.Add<PhysicsBody>(floor, PhysicsBody{.id = floorRB});
+  mScene.Add<Renderable>(floor, Renderable{.mesh = mMesh, .material = mMaterial, .textures = textureHandles});
+  mScene.Add<Scale>(floor, Scale{glm::vec3(1000)});
 
   std::vector<glm::mat4> instances;
 
@@ -325,7 +325,6 @@ void App::Run() {
       glm::mat4 rotation = glm::mat4_cast(mPhysics.GetBodyRotation(physId));
       glm::mat4 translation = glm::translate(glm::mat4(1.0f), mPhysics.GetBodyPosition(physId));
       glm::mat4 scale = mScene.Has<Scale>(ent) ? glm::scale(glm::mat4(1.0f), mScene.Get<Scale>(ent).scale) : glm::mat4(1.0f);
-      if (mScene.Has<Scale>(ent)) MAPLE_DEBUG("has scale");
       instances.push_back(translation * rotation * scale);
     }
 

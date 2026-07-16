@@ -1,14 +1,10 @@
 #pragma once
+
 #include <cstdint>
+
 namespace maple {
 
-enum class ActiveInputDevice : uint8_t {
-  MouseKeyboard,
-  XboxGamepad,
-  PlayStationGamepad,
-};
-
-enum class InputKey : uint8_t {
+enum class Key : uint8_t {
   Unknown = 0,
 
   // Letters
@@ -139,9 +135,9 @@ enum class InputKey : uint8_t {
   Count,
 };
 
-enum class InputMouseButton : uint8_t {
+enum class MouseButton : uint8_t {
   Unknown = 0,
-  
+
   Left,
   Right,
   Middle,
@@ -152,15 +148,7 @@ enum class InputMouseButton : uint8_t {
   Count,
 };
 
-enum class InputMouseAxis {
-  X,
-  Y,
-  ScrollX,
-  ScrollY,
-  Count,
-};
-
-enum class InputGamePadButton : uint8_t {
+enum class GamePadButton : uint8_t {
   A,
   B,
   X,
@@ -184,7 +172,7 @@ enum class InputGamePadButton : uint8_t {
   Count,
 };
 
-enum class InputGamePadAxis : uint8_t {
+enum class GamePadAxis : uint8_t {
   LeftX,
   LeftY,
 
