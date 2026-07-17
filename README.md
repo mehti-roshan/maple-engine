@@ -2,7 +2,7 @@
 
 A cross-platform Game engine made with C++, featuring modern libraries and features.
 
-GLFW
+SDL3
 spdlog
 Vulkan
 Dear ImGui
