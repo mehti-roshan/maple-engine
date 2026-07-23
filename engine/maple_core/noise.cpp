@@ -1,6 +1,6 @@
 #include "noise.h"
 
-#include "engine/third_party/FastNoiseLite.h"
+#include "third_party/FastNoiseLite.h"
 
 namespace maple {
 

@@ -1,0 +1,3 @@
+add_library(maple_asset_loader STATIC maple_asset_loader.cpp third_party/stb_image.cpp third_party/dr_wav.cpp third_party/stb_vorbis.c)
+target_include_directories(maple_asset_loader PUBLIC ${CMAKE_SOURCE_DIR})
+target_link_libraries(maple_asset_loader maple_logging)

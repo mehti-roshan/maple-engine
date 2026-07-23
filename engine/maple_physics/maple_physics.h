@@ -11,15 +11,14 @@
 
 namespace maple {
 
-using PhysicsBodyID = uint32_t;
-
-class MaplePhysics {
+class Physics {
  public:
-  MaplePhysics();
-  ~MaplePhysics();
+  using BodyID = uint32_t;
+  Physics();
+  ~Physics();
 
-  MaplePhysics(const MaplePhysics&) = delete;
-  MaplePhysics& operator=(const MaplePhysics&) = delete;
+  Physics(const Physics&) = delete;
+  Physics& operator=(const Physics&) = delete;
 
   bool Initialize(const glm::vec3& gravity);
   void Shutdown();
@@ -143,28 +142,28 @@ class MaplePhysics {
   };
 
   [[nodiscard]]
-  PhysicsBodyID CreateRigidBody(BodyInfo& info);
-  void DestroyRigidBody(PhysicsBodyID id);
+  BodyID CreateRigidBody(BodyInfo& info);
+  void DestroyRigidBody(BodyID id);
 
-  uint64_t GetBodyEntity(PhysicsBodyID id);
+  uint64_t GetBodyEntity(BodyID id);
 
-  glm::vec3 GetBodyPosition(PhysicsBodyID id) const;
+  glm::vec3 GetBodyPosition(BodyID id) const;
 
-  glm::quat GetBodyRotation(PhysicsBodyID id) const;
+  glm::quat GetBodyRotation(BodyID id) const;
 
-  void SetBodyPosition(PhysicsBodyID id, const glm::vec3& pos);
+  void SetBodyPosition(BodyID id, const glm::vec3& pos);
 
-  void SetBodyRotation(PhysicsBodyID id, const glm::quat& quat);
+  void SetBodyRotation(BodyID id, const glm::quat& quat);
 
-  void ApplyForce(PhysicsBodyID id, const glm::vec3& force);
+  void ApplyForce(BodyID id, const glm::vec3& force);
 
   struct RayCastResult {
-    PhysicsBodyID bodyID = 0;
+    BodyID bodyID = 0;
     glm::vec3 position{};
   };
 
   struct RayCastResultWithNormal {
-    PhysicsBodyID bodyID = 0;
+    BodyID bodyID = 0;
     glm::vec3 position{};
     glm::vec3 normal{};
   };
@@ -172,7 +171,7 @@ class MaplePhysics {
   std::optional<RayCastResult> Raycast(const glm::vec3& origin, const glm::vec3& dir, float distance);
   std::optional<RayCastResultWithNormal> RaycastWNormal(const glm::vec3& origin, const glm::vec3& dir, float distance);
 
-  std::vector<PhysicsBodyID> OverlapSphere(Sphere sphere, const glm::vec3& origin);
+  std::vector<BodyID> OverlapSphere(Sphere sphere, const glm::vec3& origin);
 
  private:
   struct Impl;

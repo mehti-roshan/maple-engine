@@ -1,9 +1,10 @@
 #include "prng.h"
 
 #include <cassert>
-#include <engine/third_party/pcg/pcg_random.hpp>
 #include <memory>
 #include <random>
+
+#include "third_party/pcg/pcg_random.hpp"
 
 namespace maple {
 struct PRNG::Impl {
@@ -34,7 +35,7 @@ uint64_t PRNG::NextUInt64(uint64_t min, uint64_t max) const {
 }
 
 bool PRNG::NextChance(double probability) const {
-  assert(probability > 0.0 && probability <= 1.0);
+  assert(probability > 0.0 && probability < 1.0);
   std::bernoulli_distribution dist(probability);
   return dist(mImpl->pcg);
 }

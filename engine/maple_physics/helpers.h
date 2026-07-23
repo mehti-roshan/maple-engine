@@ -18,13 +18,13 @@ class hlp {
   static JPH::RVec3 ToJolt(const glm::dvec3& v) { return JPH::RVec3(v.x, v.y, v.z); }
   static JPH::Quat ToJolt(const glm::quat& v) { return JPH::Quat(v.x, v.y, v.z, v.w); }
 
-  static JPH::EMotionQuality ToJolt(MaplePhysics::MotionQuality motionQuality) {
-    return motionQuality == MaplePhysics::MotionQuality::Discrete ? JPH::EMotionQuality::Discrete : JPH::EMotionQuality::LinearCast;
+  static JPH::EMotionQuality ToJolt(Physics::MotionQuality motionQuality) {
+    return motionQuality == Physics::MotionQuality::Discrete ? JPH::EMotionQuality::Discrete : JPH::EMotionQuality::LinearCast;
   }
-  static JPH::EMotionType ToJolt(MaplePhysics::MotionType motionType) {
-    return motionType == MaplePhysics::MotionType::Static
+  static JPH::EMotionType ToJolt(Physics::MotionType motionType) {
+    return motionType == Physics::MotionType::Static
       ? JPH::EMotionType::Static
-      : (motionType == MaplePhysics::MotionType::Dynamic ? JPH::EMotionType::Dynamic : JPH::EMotionType::Kinematic);
+      : (motionType == Physics::MotionType::Dynamic ? JPH::EMotionType::Dynamic : JPH::EMotionType::Kinematic);
   }
 };
 

@@ -19,7 +19,7 @@ namespace maple {
 MouseButton ConvertMouseBtnSDL(uint8_t btn);
 Key ConvertKeyBtnSDL(SDL_Keycode btn);
 
-struct MapleWindow::Impl {
+struct Window::Impl {
   SDL_Window* window = nullptr;
   bool sdlInitialized = false;
   bool shouldClose = false;
@@ -34,11 +34,11 @@ struct MapleWindow::Impl {
   std::unordered_map<CallbackHndl, GamePadsCallback> gamePadsCallback;
 };
 
-MapleWindow::MapleWindow(MapleWindow&&) noexcept = default;
-MapleWindow& MapleWindow::operator=(MapleWindow&&) noexcept = default;
+Window::Window(Window&&) noexcept = default;
+Window& Window::operator=(Window&&) noexcept = default;
 
-MapleWindow::MapleWindow() = default;
-MapleWindow::MapleWindow(const CreateInfo& info) : impl(std::make_unique<Impl>()) {
+Window::Window() = default;
+Window::Window(const CreateInfo& info) : impl(std::make_unique<Impl>()) {
   if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) MAPLE_FATAL("SDL init failed: {}", SDL_GetError());
 
   impl->sdlInitialized = true;
@@ -57,7 +57,7 @@ MapleWindow::MapleWindow(const CreateInfo& info) : impl(std::make_unique<Impl>()
   SDL_free(joysticks);
 }
 
-MapleWindow::~MapleWindow() {
+Window::~Window() {
   if (!impl) return;
 
   if (impl->window) {
@@ -71,7 +71,7 @@ MapleWindow::~MapleWindow() {
   }
 }
 
-std::vector<const char*> MapleWindow::RequiredVkInstanceExtensions() const {
+std::vector<const char*> Window::RequiredVkInstanceExtensions() const {
   uint32_t count = 0;
 
   const char* const* extensions = SDL_Vulkan_GetInstanceExtensions(&count);
@@ -79,7 +79,7 @@ std::vector<const char*> MapleWindow::RequiredVkInstanceExtensions() const {
   return {extensions, extensions + count};
 }
 
-void* MapleWindow::CreateWindowSurface(void* instance) const {
+void* Window::CreateWindowSurface(void* instance) const {
   VkSurfaceKHR surface{};
 
   if (!SDL_Vulkan_CreateSurface(impl->window, static_cast<VkInstance>(instance), nullptr, &surface)) {
@@ -89,12 +89,12 @@ void* MapleWindow::CreateWindowSurface(void* instance) const {
   return surface;
 }
 
-void MapleWindow::SetTitle(const std::string& title) const { SDL_SetWindowTitle(impl->window, title.c_str()); }
+void Window::SetTitle(const std::string& title) const { SDL_SetWindowTitle(impl->window, title.c_str()); }
 
-bool MapleWindow::ShouldClose() const { return impl->shouldClose; }
-void MapleWindow::SetShouldClose(bool shouldClose) { impl->shouldClose = shouldClose; }
+bool Window::ShouldClose() const { return impl->shouldClose; }
+void Window::SetShouldClose(bool shouldClose) { impl->shouldClose = shouldClose; }
 
-void MapleWindow::PollEvents() const {
+void Window::PollEvents() const {
   SDL_Event event;
 
   while (SDL_PollEvent(&event)) {
@@ -104,7 +104,7 @@ void MapleWindow::PollEvents() const {
   UpdateJoySticks();
 }
 
-void MapleWindow::DispatchEvent(const SDL_Event& e) const {
+void Window::DispatchEvent(const SDL_Event& e) const {
   static std::optional<std::pair<int32_t, int32_t>> mouseCoords = std::nullopt;
   switch (e.type) {
     case SDL_EVENT_QUIT:
@@ -182,7 +182,7 @@ void MapleWindow::DispatchEvent(const SDL_Event& e) const {
   }
 }
 
-void MapleWindow::UpdateJoySticks() const {
+void Window::UpdateJoySticks() const {
   std::vector<std::pair<int32_t, GamePadState>> states;
   states.reserve(impl->gamepads.size());
 
@@ -219,7 +219,7 @@ void MapleWindow::UpdateJoySticks() const {
   }
 }
 
-std::pair<int32_t, int32_t> MapleWindow::GetFrameBufferSize() const {
+std::pair<int32_t, int32_t> Window::GetFrameBufferSize() const {
   int w, h;
 
   SDL_GetWindowSizeInPixels(impl->window, &w, &h);
@@ -227,7 +227,7 @@ std::pair<int32_t, int32_t> MapleWindow::GetFrameBufferSize() const {
   return {w, h};
 }
 
-std::string MapleWindow::GetJoyStickName(int32_t jid) const {
+std::string Window::GetJoyStickName(int32_t jid) const {
   auto it = impl->gamepads.find(jid);
   if (it == impl->gamepads.end()) {
     MAPLE_WARN("invalid gamepad id '{}'", jid);
@@ -236,82 +236,82 @@ std::string MapleWindow::GetJoyStickName(int32_t jid) const {
   return SDL_GetGamepadName(it->second);
 }
 
-void MapleWindow::LockCursor() const { SDL_SetWindowRelativeMouseMode(impl->window, true); }
-void MapleWindow::UnlockCursor() const { SDL_SetWindowRelativeMouseMode(impl->window, false); }
+void Window::LockCursor() const { SDL_SetWindowRelativeMouseMode(impl->window, true); }
+void Window::UnlockCursor() const { SDL_SetWindowRelativeMouseMode(impl->window, false); }
 
 template <typename T>
-MapleWindow::CallbackHndl findNextFreeCallbackSlot() {
-  static MapleWindow::CallbackHndl hndl = 0;
+Window::CallbackHndl findNextFreeCallbackSlot() {
+  static Window::CallbackHndl hndl = 0;
   return hndl++;
 }
 
-MapleWindow::CallbackHndl MapleWindow::AddFramebufferSizeCallback(FrameBufferSizeCallback callback) {
+Window::CallbackHndl Window::AddFramebufferSizeCallback(FrameBufferSizeCallback callback) {
   auto hndl = findNextFreeCallbackSlot<typeof(callback)>();
   impl->frameBufferSizeCallbacks[hndl] = callback;
   return hndl;
 }
 
-void MapleWindow::RemoveFramebufferSizeCallback(MapleWindow::CallbackHndl hndl) {
+void Window::RemoveFramebufferSizeCallback(Window::CallbackHndl hndl) {
   auto it = impl->frameBufferSizeCallbacks.find(hndl);
   if (it == impl->frameBufferSizeCallbacks.end()) return;
   impl->frameBufferSizeCallbacks.erase(it);
 }
 
-MapleWindow::CallbackHndl MapleWindow::AddKeyCallback(const KeyCallback& callback) {
+Window::CallbackHndl Window::AddKeyCallback(const KeyCallback& callback) {
   auto hndl = findNextFreeCallbackSlot<typeof(callback)>();
   impl->keyCallbacks[hndl] = callback;
   return hndl;
 }
 
-void MapleWindow::RemoveKeyCallback(MapleWindow::CallbackHndl hndl) {
+void Window::RemoveKeyCallback(Window::CallbackHndl hndl) {
   auto it = impl->keyCallbacks.find(hndl);
   if (it == impl->keyCallbacks.end()) return;
   impl->keyCallbacks.erase(it);
 }
 
-MapleWindow::CallbackHndl MapleWindow::AddMouseButtonCallback(MouseButtonCallback callback) {
+Window::CallbackHndl Window::AddMouseButtonCallback(MouseButtonCallback callback) {
   auto hndl = findNextFreeCallbackSlot<typeof(callback)>();
   impl->mouseButtonCallbacks[hndl] = callback;
   return hndl;
 }
 
-void MapleWindow::RemoveMouseButtonCallback(MapleWindow::CallbackHndl hndl) {
+void Window::RemoveMouseButtonCallback(Window::CallbackHndl hndl) {
   auto it = impl->mouseButtonCallbacks.find(hndl);
   if (it == impl->mouseButtonCallbacks.end()) return;
   impl->mouseButtonCallbacks.erase(it);
 }
 
-MapleWindow::CallbackHndl MapleWindow::AddScrollCallback(ScrollCallback callback) {
+Window::CallbackHndl Window::AddScrollCallback(ScrollCallback callback) {
   auto hndl = findNextFreeCallbackSlot<typeof(callback)>();
   impl->scrollCallbacks[hndl] = callback;
   return hndl;
 }
 
-void MapleWindow::RemoveScrollCallback(MapleWindow::CallbackHndl hndl) {
+void Window::RemoveScrollCallback(Window::CallbackHndl hndl) {
   auto it = impl->scrollCallbacks.find(hndl);
   if (it == impl->scrollCallbacks.end()) return;
   impl->scrollCallbacks.erase(it);
 }
 
-MapleWindow::CallbackHndl MapleWindow::AddGamePadsCallback(GamePadsCallback callback) {
+Window::CallbackHndl Window::AddGamePadsCallback(GamePadsCallback callback) {
   auto hndl = findNextFreeCallbackSlot<typeof(callback)>();
   impl->gamePadsCallback[hndl] = callback;
   return hndl;
 }
 
-void MapleWindow::RemoveGamePadsCallback(MapleWindow::CallbackHndl hndl) {
+void Window::RemoveGamePadsCallback(Window::CallbackHndl hndl) {
   auto it = impl->gamePadsCallback.find(hndl);
   if (it == impl->gamePadsCallback.end()) return;
   impl->gamePadsCallback.erase(it);
 }
 
-MapleWindow::CallbackHndl MapleWindow::AddCursorPosCallback(CursorPosCallback callback) {
+Window::CallbackHndl Window::AddCursorPosCallback(CursorPosCallback callback) {
   auto hndl = findNextFreeCallbackSlot<typeof(callback)>();
   impl->cursorPosCallbacks[hndl] = callback;
   return hndl;
 }
 
-void MapleWindow::RemoveCursorPosCallback(MapleWindow::CallbackHndl hndl) {
+void Window::RemoveCursorPosCallback(Window::CallbackHndl hndl) {
   auto it = impl->cursorPosCallbacks.find(hndl);
   if (it == impl->cursorPosCallbacks.end()) return;
   impl->cursorPosCallbacks.erase(it);

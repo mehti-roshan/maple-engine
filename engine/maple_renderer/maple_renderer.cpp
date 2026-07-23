@@ -54,13 +54,13 @@ struct DrawPush {
 
 using RenderTargetHndl = uint32_t;
 
-struct MapleRenderer::Impl {
+struct Renderer::Impl {
   VkRendererCtx mCtx;
   Pool<vkm::Mesh> mMeshPool;
   Pool<Material> mMaterialPool;
 
-  Pool<RenderTarget> mRenderTargets;                     // slots directly map to texture slot
-  Pool<std::pair<RenderTarget, uint32_t>> mTexturePool;  // RenderTarget and reference counter
+  Pool<RenderTarget> mRenderTargets;  // slots directly map to texture slot
+  Pool<RenderTarget> mTexturePool;
   std::unordered_map<std::string, RenderTargetHndl> mRenderTargetMap;
 
   vkm::PipelineLayout mGlobalPipelineLayout;
@@ -88,15 +88,15 @@ std::optional<Format> FindFirstSupportedFormat(std::span<const Format> formats, 
   return std::nullopt;
 }
 
-std::optional<Format> MapleRenderer::FindFirstSupportedTextureFormat(std::span<const Format> formats) const {
+std::optional<Format> Renderer::FindFirstSupportedTextureFormat(std::span<const Format> formats) const {
   return FindFirstSupportedFormat(formats, impl->mCtx, vk::FormatFeatureFlagBits::eSampledImage);
 }
 
-std::optional<Format> MapleRenderer::FindFirstSupportedDepthAttachmentFormat(std::span<const Format> formats) const {
+std::optional<Format> Renderer::FindFirstSupportedDepthAttachmentFormat(std::span<const Format> formats) const {
   return FindFirstSupportedFormat(formats, impl->mCtx, vk::FormatFeatureFlagBits::eDepthStencilAttachment);
 }
 
-MapleRenderer::MeshHndl MapleRenderer::CreateMesh(const MeshData& data) {
+Renderer::MeshHndl Renderer::CreateMesh(const MeshData& data) {
   auto& ctx = impl->mCtx;
   auto mesh = vkm::Mesh(impl->mCtx.mAllocator, data);
   auto cmd = ctx.beginSingleTimeCommands();
@@ -111,33 +111,23 @@ MapleRenderer::MeshHndl MapleRenderer::CreateMesh(const MeshData& data) {
   return val;
 }
 
-void MapleRenderer::AddMeshRef(MeshHndl hndl) { impl->mMeshPool.Get(hndl).AddRef(); }
-void MapleRenderer::RemoveMeshRef(MeshHndl hndl) {
-  auto count = impl->mMeshPool.Get(hndl).RemoveRef();
-  if (count == 0) {
-    impl->mCtx.mDevice.device.waitIdle();
-    impl->mMeshPool.Remove(hndl);
-  }
+void Renderer::DestroyMesh(MeshHndl hndl) {
+  impl->mCtx.mDevice.device.waitIdle();
+  impl->mMeshPool.Remove(hndl);
 }
 
-MapleRenderer::MaterialHndl MapleRenderer::CreateMaterial(const std::string& shaderCode,
-                                                          const std::string& shaderFileName,
-                                                          const MaterialBuilderData& data) {
+Renderer::MaterialHndl Renderer::CreateMaterial(const std::string& shaderCode, const std::string& shaderFileName, const MaterialBuilderData& data) {
   MaterialBuilderData compiledData = data;
   compiledData.shaderCode = compileSlangToSpirv(shaderCode, shaderFileName, data.vertEntryFuncName, data.fragEntryFuncName);
   return impl->mMaterialPool.Add(Material(compiledData));
 }
 
-void MapleRenderer::AddMaterialRef(MaterialHndl hndl) { impl->mMaterialPool.Get(hndl).AddRef(); }
-void MapleRenderer::RemoveMaterialRef(MaterialHndl hndl) {
-  auto count = impl->mMaterialPool.Get(hndl).RemoveRef();
-  if (count == 0) {
-    impl->mCtx.mDevice.device.waitIdle();
-    impl->mMaterialPool.Remove(hndl);
-  }
+void Renderer::DestroyMaterial(MaterialHndl hndl) {
+  impl->mCtx.mDevice.device.waitIdle();
+  impl->mMaterialPool.Remove(hndl);
 }
 
-MapleRenderer::TextureHndl MapleRenderer::CreateTexture(glm::uvec2 dimensions, std::span<const uint8_t> bytes, Format format) {
+Renderer::TextureHndl Renderer::CreateTexture(glm::uvec2 dimensions, std::span<const uint8_t> bytes, Format format) {
   auto& ctx = impl->mCtx;
 
   vk::ImageUsageFlags usage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst;
@@ -158,29 +148,22 @@ MapleRenderer::TextureHndl MapleRenderer::CreateTexture(glm::uvec2 dimensions, s
   img.TransitionLayout(cmd, vk::ImageLayout::eTransferDstOptimal, ToVulkan(ImageLayout::ShaderReadOnlyOptimal));
   ctx.endSingleTimeCommands(cmd);
 
-  auto hndl = impl->mTexturePool.Add(std::make_pair(
-    RenderTarget{
-      .info =
-        {
-          .sizeType = SizeType::Absolute,
-          .size = dimensions,
-          .format = format,
-        },
-      .target = std::move(img),
-    },
-    0));
+  auto hndl = impl->mTexturePool.Add(RenderTarget{
+    .info =
+      {
+        .sizeType = SizeType::Absolute,
+        .size = dimensions,
+        .format = format,
+      },
+    .target = std::move(img),
+  });
 
   return hndl;
 }
 
-void MapleRenderer::AddTextureRef(TextureHndl hndl) { impl->mTexturePool.Get(hndl).second++; }
-void MapleRenderer::RemoveTextureRef(TextureHndl hndl) {
-  auto& count = impl->mTexturePool.Get(hndl).second;
-  count--;
-  if (count == 0) {
-    impl->mCtx.mDevice.device.waitIdle();
-    impl->mTexturePool.Remove(hndl);
-  }
+void Renderer::DestroyTexture(TextureHndl hndl) {
+  impl->mCtx.mDevice.device.waitIdle();
+  impl->mTexturePool.Remove(hndl);
 }
 
 // FrameIdx, SwapChainIdx
@@ -234,7 +217,7 @@ void CreateMissingAttachments(const std::vector<RenderGraph::NameAndAttachment>&
   }
 }
 
-void MapleRenderer::DrawFrame(const UBO& frameUBO, const RenderGraph::CompileResult& compiledRenderGraph, std::span<const PassDraw> passDraws) {
+void Renderer::DrawFrame(const UBO& frameUBO, const RenderGraph::CompileResult& compiledRenderGraph, std::span<const PassDraw> passDraws) {
   auto& ctx = impl->mCtx;
   auto& renderTargets = impl->mRenderTargets;
   auto& texturePool = impl->mTexturePool;
@@ -290,7 +273,7 @@ void MapleRenderer::DrawFrame(const UBO& frameUBO, const RenderGraph::CompileRes
 
       vk::DescriptorImageInfo imgInfo{};
       imgInfo.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
-      imgInfo.imageView = texturePool.Get(updated).first.target.view;
+      imgInfo.imageView = texturePool.Get(updated).target.view;
       imgInfo.sampler = impl->mDefaultSampler.sampler;
 
       vk::WriteDescriptorSet write{};
@@ -564,10 +547,8 @@ void MapleRenderer::DrawFrame(const UBO& frameUBO, const RenderGraph::CompileRes
   }
 }
 
-MapleRenderer::MapleRenderer() : impl(std::make_unique<Impl>()) {}
-MapleRenderer::MapleRenderer(const std::vector<const char*>& glfwExtensions,
-                             SurfaceCreateCallback surfaceCb,
-                             FrameBufferSizeCallback frameBufferSizeCb)
+Renderer::Renderer() : impl(std::make_unique<Impl>()) {}
+Renderer::Renderer(const std::vector<const char*>& glfwExtensions, SurfaceCreateCallback surfaceCb, FrameBufferSizeCallback frameBufferSizeCb)
     : impl(std::make_unique<Impl>()) {
   auto& ctx = impl->mCtx;
   ctx.Init(glfwExtensions, surfaceCb, frameBufferSizeCb);
@@ -660,12 +641,12 @@ MapleRenderer::MapleRenderer(const std::vector<const char*>& glfwExtensions,
     ctx.mDevice.device.updateDescriptorSets(writes, {});
   }
 }
-MapleRenderer::~MapleRenderer() {
+Renderer::~Renderer() {
   if (impl) {
     impl->mCtx.Destroy();
   }
 };
 
-MapleRenderer::MapleRenderer(MapleRenderer&&) noexcept = default;
-MapleRenderer& MapleRenderer::operator=(MapleRenderer&&) noexcept = default;
+Renderer::Renderer(Renderer&&) noexcept = default;
+Renderer& Renderer::operator=(Renderer&&) noexcept = default;
 }  // namespace maple

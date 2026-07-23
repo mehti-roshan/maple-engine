@@ -15,13 +15,13 @@
 
 namespace maple {
 
-class MapleRenderer {
+class Renderer {
  public:
-  MapleRenderer();
-  MapleRenderer(const std::vector<const char*>& glfwExtensions, SurfaceCreateCallback, FrameBufferSizeCallback);
-  ~MapleRenderer();
-  MapleRenderer(MapleRenderer&&) noexcept;
-  MapleRenderer& operator=(MapleRenderer&&) noexcept;
+  Renderer();
+  Renderer(const std::vector<const char*>& glfwExtensions, SurfaceCreateCallback, FrameBufferSizeCallback);
+  ~Renderer();
+  Renderer(Renderer&&) noexcept;
+  Renderer& operator=(Renderer&&) noexcept;
 
   void SetFrameBufferResized() { mFrameBufferResized = true; };
 
@@ -31,18 +31,15 @@ class MapleRenderer {
 
   [[nodiscard]]
   MeshHndl CreateMesh(const MeshData& data);
-  void AddMeshRef(MeshHndl);
-  void RemoveMeshRef(MeshHndl);
+  void DestroyMesh(MeshHndl);
 
   [[nodiscard]]
   MaterialHndl CreateMaterial(const std::string& shaderCode, const std::string& shaderFileName, const MaterialBuilderData& data);
-  void AddMaterialRef(MaterialHndl);
-  void RemoveMaterialRef(MaterialHndl);
+  void DestroyMaterial(MaterialHndl);
 
   [[nodiscard]]
   TextureHndl CreateTexture(glm::uvec2 dimensions, std::span<const uint8_t> bytes, Format format);
-  void AddTextureRef(TextureHndl hndl);
-  void RemoveTextureRef(TextureHndl hndl);
+  void DestroyTexture(TextureHndl hndl);
 
   std::optional<Format> FindFirstSupportedTextureFormat(std::span<const Format> formats) const;
   std::optional<Format> FindFirstSupportedDepthAttachmentFormat(std::span<const Format> formats) const;
@@ -56,7 +53,7 @@ class MapleRenderer {
   struct MeshDraw {
     MeshHndl mesh;
     std::span<const glm::mat4> instanceData;
-    std::span<std::variant<const std::string, TextureHndl>> usedResources; // string means sampling a render target, otherwise a regular texture
+    std::span<std::variant<const std::string, TextureHndl>> usedResources;  // string means sampling a render target, otherwise a regular texture
   };
 
   struct MaterialDraw {

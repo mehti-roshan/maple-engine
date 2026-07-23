@@ -22,6 +22,9 @@ void Input::BeginFrame() {
 }
 
 void Input::Bind(const std::string& name, const Binding& binding) { mBindings[name].push_back(binding); }
+void Input::Bind(const std::string& name, const std::vector<Binding>& bindings) {
+  for (auto binding : bindings) Bind(name, binding);
+}
 
 bool Input::Pressed(const std::string& name) const {
   auto it = mBindings.find(name);
@@ -110,10 +113,10 @@ glm::vec2 ApplyDeadZone(glm::vec2 v, float deadZone) {
 Input::GamePadState ApplyDeadZoneToState(const Input::GamePadState& pad, float leftStickDeadZone, float rightStickDeadZone) {
   Input::GamePadState v = pad;
 
-  auto leftStickDead =
-    ApplyDeadZone(glm::vec2(v.axes[static_cast<size_t>(InputGamePadAxis::LeftX)], v.axes[static_cast<size_t>(InputGamePadAxis::LeftY)]), leftStickDeadZone);
-  auto rightStickDead =
-    ApplyDeadZone(glm::vec2(v.axes[static_cast<size_t>(InputGamePadAxis::RightX)], v.axes[static_cast<size_t>(InputGamePadAxis::RightY)]), rightStickDeadZone);
+  auto leftStickDead = ApplyDeadZone(
+    glm::vec2(v.axes[static_cast<size_t>(InputGamePadAxis::LeftX)], v.axes[static_cast<size_t>(InputGamePadAxis::LeftY)]), leftStickDeadZone);
+  auto rightStickDead = ApplyDeadZone(
+    glm::vec2(v.axes[static_cast<size_t>(InputGamePadAxis::RightX)], v.axes[static_cast<size_t>(InputGamePadAxis::RightY)]), rightStickDeadZone);
 
   v.axes[static_cast<size_t>(InputGamePadAxis::LeftX)] = leftStickDead.x;
   v.axes[static_cast<size_t>(InputGamePadAxis::LeftY)] = leftStickDead.y;
@@ -150,8 +153,6 @@ ActiveInputDevice Input::GetInputDevice() const { return mActiveInputDevice; }
 void Input::SetRightStickDeadZone(float v) { mRightStickDeadZone = glm::clamp<float>(v, 0.0f, 1.0f); }
 void Input::SetLeftStickDeadZone(float v) { mLeftStickDeadZone = glm::clamp<float>(v, 0.0f, 1.0f); }
 
-void Input::OnKey(InputKey key, bool pressed) {
-  mKeys[static_cast<size_t>(key)].current = pressed;
-}
+void Input::OnKey(InputKey key, bool pressed) { mKeys[static_cast<size_t>(key)].current = pressed; }
 
 }  // namespace maple

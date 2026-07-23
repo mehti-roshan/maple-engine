@@ -21,7 +21,6 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 #define TINYOBJLOADER_IMPLEMENTATION
-#include <engine/third_party/tiny_obj_loader.h>
 
 #include "vk_physical_device.h"
 

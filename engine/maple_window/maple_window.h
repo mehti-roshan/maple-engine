@@ -13,7 +13,7 @@
 union SDL_Event;
 
 namespace maple {
-class MapleWindow {
+class Window {
  public:
   struct CreateInfo {
     const std::string& title;
@@ -32,11 +32,11 @@ class MapleWindow {
   using CursorPosCallback = std::function<void(double xPos, double yPos)>;
   using GamePadsCallback = std::function<void(const std::vector<std::pair<int32_t, GamePadState>>&)>;
 
-  MapleWindow();
-  MapleWindow(const CreateInfo& info);
-  ~MapleWindow();
-  MapleWindow(MapleWindow&&) noexcept;
-  MapleWindow& operator=(MapleWindow&&) noexcept;
+  Window();
+  Window(const CreateInfo& info);
+  ~Window();
+  Window(Window&&) noexcept;
+  Window& operator=(Window&&) noexcept;
 
 
   void SetTitle(const std::string& title) const;

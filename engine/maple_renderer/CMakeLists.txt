@@ -2,4 +2,4 @@ add_library(maple_renderer STATIC maple_renderer.cpp vk_renderer_ctx.cpp enums.c
 target_compile_definitions(maple_renderer PRIVATE VULKAN_HPP_NO_STRUCT_CONSTRUCTORS)
 target_link_directories(maple_renderer PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/slang/lib)
 target_include_directories(maple_renderer PUBLIC ${CMAKE_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/slang/include)
-target_link_libraries(maple_renderer vulkan maple_logging maple_asset slang)
+target_link_libraries(maple_renderer maple_logging vulkan slang)

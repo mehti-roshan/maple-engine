@@ -4,21 +4,20 @@
 #include <glm/ext/quaternion_transform.hpp>
 #include <glm/ext/quaternion_trigonometric.hpp>
 #include <glm/gtc/constants.hpp>
+#include <optional>
 #include <utility>
 #include <vector>
 
 #include "enums.h"
-#include "maple_asset/maple_asset.h"
-#include "maple_core/input_enums.h"
-#include "maple_core/noise.h"
+#include "maple_asset_loader/maple_asset_loader.h"
 #include "maple_core/prng.h"
 #include "maple_logging/log_macros.h"
 #include "maple_physics.h"
 #include "maple_renderer.h"
-#include "maple_renderer/material_builder_data.h"
 #include "maple_renderer/render_graph.h"
-#include "maple_scene.h"
 #include "maple_window/maple_window.h"
+#include "material_builder_data.h"
+#include "pool.h"
 
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #define GLM_FORCE_RADIANS
@@ -31,31 +30,11 @@
 
 namespace maple {
 
-static App* sApp = nullptr;
-
-void App::OnDestroyPhysicsBody(entt::registry& registry, entt::entity entity) {
-  sApp->mPhysics.DestroyRigidBody(registry.get<PhysicsBody>(entity).id);
-}
-void App::OnCreateRenderable(entt::registry& registry, entt::entity entity) {
-  auto e = registry.get<Renderable>(entity);
-  sApp->mRenderer.AddMeshRef(e.mesh);
-  sApp->mRenderer.AddMaterialRef(e.material);
-  for (auto& tex : e.textures) sApp->mRenderer.AddTextureRef(tex);
-}
-void App::OnDestroyRenderable(entt::registry& registry, entt::entity entity) {
-  auto e = registry.get<Renderable>(entity);
-  sApp->mRenderer.RemoveMeshRef(e.mesh);
-  sApp->mRenderer.RemoveMaterialRef(e.material);
-  for (auto& tex : e.textures) sApp->mRenderer.RemoveTextureRef(tex);
-}
-
 void App::Init() {
-  sApp = this;
-
   logging::Log::init();
   MAPLE_INFO("Initializing...");
 
-  mWindow = MapleWindow({.title = "Maple"});
+  mWindow = Window({.title = "Maple"});
 
   mWindow.LockCursor();
   mWindow.AddFramebufferSizeCallback([&](int32_t width, int32_t height) { mRenderer.SetFrameBufferResized(); });
@@ -73,11 +52,13 @@ void App::Init() {
     mInput.OnJoySticks(cpy);
   });
 
+  mAudio = Audio(Audio::CreateInfo{});
+
   mCam.SetPosition(glm::vec3(0));
 
   mPhysics.Initialize(glm::vec3(0, -9.81, 0));
 
-  mRenderer = MapleRenderer(
+  mRenderer = Renderer(
     mWindow.RequiredVkInstanceExtensions(),
     [&](void* pVkInstance) { return mWindow.CreateWindowSurface(pVkInstance); },
     [&](uint32_t& width, uint32_t& height) {
@@ -173,71 +154,75 @@ void App::Init() {
     .numVerts = static_cast<uint32_t>(verts.size()),
   });
 
-  mMaterial = mRenderer.CreateMaterial(MapleAsset::ReadFileStr("assets/shaders/shader.slang"), "shader", {.rasterizer = {}});
+  mMaterial = mRenderer.CreateMaterial(
+    AssetLoader::LoadFileStr("assets/shaders/shader.slang"), "shader", {.rasterizer = {.cullMode = MaterialBuilderData::CullModeFlagBits::None}});
 
   std::array colorFormats = {Format::R8G8B8A8_SRGB, Format::B8G8R8A8_SRGB};
   auto format = mRenderer.FindFirstSupportedTextureFormat(colorFormats);
   if (!format.has_value()) MAPLE_FATAL("failed to find suitable color format");
 
   {
-    auto img = MapleAsset::LoadImage("assets/textures/texture.jpg");
+    auto img = AssetLoader::LoadImage("assets/textures/texture.jpg");
     mTex1 = mRenderer.CreateTexture(img.size, img.bytes, *format);
   }
 
   {
-    auto img = MapleAsset::LoadImage("assets/textures/viking_room.png");
+    auto img = AssetLoader::LoadImage("assets/textures/viking_room.png");
     mTex2 = mRenderer.CreateTexture(img.size, img.bytes, *format);
   }
 
-  mInput.Bind("exit", {InputKey::Escape});
-  mInput.Bind("exit", {InputGamePadButton::Start});
-
-  mInput.Bind("forward", {InputKey::W});
-  mInput.Bind("forward", {InputKey::S, false});
-  mInput.Bind("sideways", {InputKey::D});
-  mInput.Bind("sideways", {InputKey::A, false});
-  mInput.Bind("upward", {InputKey::Space});
-  mInput.Bind("upward", {InputKey::LeftControl, false});
-
-  mInput.Bind("roll", {InputKey::E});
-  mInput.Bind("roll", {InputKey::Q, false});
-
-  mInput.Bind("forward", {InputGamePadAxis::LeftY, false});
-  mInput.Bind("sideways", {InputGamePadAxis::LeftX});
-  mInput.Bind("upward", {InputGamePadButton::A});
-  mInput.Bind("upward", {InputGamePadButton::B, false});
+  mInput.Bind("forward", {{InputKey::W}, {InputKey::S, false}, {InputGamePadAxis::LeftY, false}});
+  mInput.Bind("sideways", {{InputKey::D}, {InputKey::A, false}, {InputGamePadAxis::LeftX}});
+  mInput.Bind("upward", {{InputKey::Space}, {InputKey::LeftControl, false}, {InputGamePadButton::A}, {InputGamePadButton::B, false}});
+  mInput.Bind("roll", {{InputKey::E}, {InputKey::Q, false}, {InputGamePadButton::RightBumper}, {InputGamePadButton::LeftBumper, false}});
 
   mInput.Bind("look_vertical", {InputGamePadAxis::RightY, false});
   mInput.Bind("look_horizontal", {InputGamePadAxis::RightX, false});
-  mInput.Bind("roll", {InputGamePadButton::RightBumper});
-  mInput.Bind("roll", {InputGamePadButton::LeftBumper, false});
 
-  mInput.Bind("click", {InputMouseButton::Left});
-  mInput.Bind("click", {InputGamePadAxis::RightTrigger});
-  mInput.Bind("delete", {InputMouseButton::Right});
-  mInput.Bind("delete", {InputGamePadButton::Y});
+  mInput.Bind("click", {{InputMouseButton::Left}, {InputGamePadAxis::RightTrigger}});
+  mInput.Bind("delete", {{InputMouseButton::Right}, {InputGamePadButton::Y}});
+  mInput.Bind("exit", {{InputKey::Escape}, {InputGamePadButton::Start}});
 
   mTime.Initialize();
-
-  mScene.OnDestroy<PhysicsBody>().connect<&App::OnDestroyPhysicsBody>();
-
-  mScene.OnCreate<Renderable>().connect<&App::OnCreateRenderable>();
-
-  mScene.OnDestroy<Renderable>().connect<&App::OnDestroyRenderable>();
 }
+
+struct Renderable {
+  MeshHndl mesh;
+  MaterialHndl material;
+  std::vector<TextureHndl>* textures = nullptr;
+};
+
+struct Transform {
+  glm::vec3 pos{};
+  glm::quat orientation = glm::identity<glm::quat>();
+};
+
+struct Entity {
+  std::optional<Transform> transform = std::nullopt;
+  std::optional<glm::vec3> scale = std::nullopt;
+  PhysicsBodyID rigidBody{};
+  Renderable renderable;
+};
 
 void App::Run() {
   Init();
 
-  // Noise noise(rng.NextUInt64(), Noise::Type::Perlin);
-  // noise.SetFrequency(0.1f).SetFractalType(Noise::FractalType::FBm).SetFractalOctaves(2);
   PRNG rng(time(0));
 
   std::vector<TextureHndl> textureHandles = {mTex1};
 
-  auto shape = MaplePhysics::Box{};
-  for (size_t i = 0; i < 2500; i++) {
-    auto ent = mScene.CreateEntity();
+  Pool<Entity> entities;
+
+  auto floor = entities.Add({
+    .transform = Transform{.pos = glm::vec3(0, -0.5, 0)},
+    .scale = glm::vec3(1000, 1, 1000),
+    .renderable = {.mesh = mMesh, .material = mMaterial, .textures = &textureHandles},
+  });
+  auto data = Physics::BodyInfo{floor, Physics::Plane{}, Physics::MotionType::Static};
+  entities.Get(floor).rigidBody = mPhysics.CreateRigidBody(data);
+
+  auto shape = Physics::Box{};
+  for (size_t i = 0; i < 1000; i++) {
     auto dir = glm::normalize(glm::vec3(rng.NextFloat(-1), rng.NextFloat(), rng.NextFloat(-1)));
     auto speed = rng.NextFloat() * 500.0f + 50.0f;
     auto pos = dir * speed;
@@ -245,29 +230,29 @@ void App::Run() {
     auto angle = rng.NextFloat(0, glm::two_pi<float>());
     auto axis = glm::vec3(rng.NextFloat(-1.0f, 1.0f), rng.NextFloat(-1.0f, 1.0f), rng.NextFloat(-1.0f, 1.0f));
 
-    auto data = MaplePhysics::BodyInfo{
-      .entityID = static_cast<uint32_t>(ent),
+    auto ent = entities.Add({.renderable = {.mesh = mMesh, .material = mMaterial, .textures = &textureHandles}});
+    auto bodyInfo = Physics::BodyInfo{
+      .entityID = ent,
       .shape = shape,
-      .motionType = MaplePhysics::MotionType::Dynamic,
+      .motionType = Physics::MotionType::Dynamic,
       .position = pos,
       .orientation = glm::normalize(glm::angleAxis(angle, axis)),
       .restitution = 0.2f,
     };
-    auto rb = mPhysics.CreateRigidBody(data);
-
-    mScene.Add<PhysicsBody>(ent, PhysicsBody{.id = rb});
-    mScene.Add<Renderable>(ent, Renderable{.mesh = mMesh, .material = mMaterial, .textures = textureHandles});
+    entities.Get(ent).rigidBody = mPhysics.CreateRigidBody(bodyInfo);
   }
 
-  auto floor = mScene.CreateEntity();
-  auto data = MaplePhysics::BodyInfo{static_cast<uint32_t>(floor), MaplePhysics::Plane{.distance = -500}, MaplePhysics::MotionType::Static};
-  data.position = glm::vec3(0, -500, 0);
-  auto floorRB = mPhysics.CreateRigidBody(data);
-  mScene.Add<PhysicsBody>(floor, PhysicsBody{.id = floorRB});
-  mScene.Add<Renderable>(floor, Renderable{.mesh = mMesh, .material = mMaterial, .textures = textureHandles});
-  mScene.Add<Scale>(floor, Scale{glm::vec3(1000)});
-
   std::vector<glm::mat4> instances;
+
+  auto audioSamples = AssetLoader::LoadAudio("assets/explosion.wav");
+  auto clip = mAudio.CreateClip({
+    .data = std::move(audioSamples.data),
+    .sampleCount = audioSamples.sampleCount,
+    .sampleRate = audioSamples.sampleRate,
+    .bitsPerSample = audioSamples.bitsPerSample,
+    .formatIsFloatingPoint = audioSamples.floatingPointFormat,
+    .isStereo = audioSamples.channels > 1,
+  });
 
   float physicsDeltaTime = 1.0f / 60.0f;
   float remainingPhysicsTime = 0.0f;
@@ -298,6 +283,9 @@ void App::Run() {
     mCam.Pitch(look.y);
     mCam.Roll(mInput.Value("roll") * rollSpeed * mTime.DeltaTime());
 
+    if (mInput.Released("upward")) {
+      mAudio.PlayClip(clip, {});
+    }
     if (mInput.Value("click") > 0.5) {
       auto rayResult = mPhysics.Raycast(mCam.GetPosition(), mCam.Forward(), 1000.0f);
       if (rayResult != std::nullopt) {
@@ -306,9 +294,11 @@ void App::Run() {
         for (auto body : overlaps) {
           instances.push_back(glm::scale(glm::translate(glm::mat4(1.0f), mPhysics.GetBodyPosition(body)), glm::vec3(2.0f)));
           if (mInput.Value("delete") < 0.5) continue;
-          auto ent = static_cast<Entity>(mPhysics.GetBodyEntity(body));
-          // if (ent == floor) continue;
-          mScene.DestroyEntity(ent);
+          auto ent = mPhysics.GetBodyEntity(body);
+          if (ent == floor) continue;
+          MAPLE_DEBUG("removing: {}", ent);
+          mPhysics.DestroyRigidBody(body);
+          entities.Remove(ent);
         }
       }
     }
@@ -319,27 +309,43 @@ void App::Run() {
       mPhysics.Update(physicsDeltaTime);
     }
 
-    for (auto ent : mScene.View<Renderable>()) {
-      if (!mScene.Has<PhysicsBody>(ent)) MAPLE_FATAL("renderable did not have physics body");
-      auto physId = mScene.Get<PhysicsBody>(ent).id;
+    auto count = entities.ActiveCount();
+    int64_t i = -1;
+    while (i != count) {
+      i++;
+      if (!entities.IsValid(i)) continue;
+      auto& e = entities.Get(i);
+
+      MAPLE_ASSERT(e.transform.has_value() || e.rigidBody != 0, "entity required to have either a transform or rigidbody");
+
+      auto physId = e.rigidBody;
+      glm::mat4 transform(1.0f);
+      transform = glm::translate(transform, mPhysics.GetBodyPosition(physId));
       glm::mat4 rotation = glm::mat4_cast(mPhysics.GetBodyRotation(physId));
-      glm::mat4 translation = glm::translate(glm::mat4(1.0f), mPhysics.GetBodyPosition(physId));
-      glm::mat4 scale = mScene.Has<Scale>(ent) ? glm::scale(glm::mat4(1.0f), mScene.Get<Scale>(ent).scale) : glm::mat4(1.0f);
-      instances.push_back(translation * rotation * scale);
+      transform *= rotation;
+      if (e.transform.has_value()) {
+        transform = glm::translate(transform, e.transform->pos);
+        glm::mat4 rotation = glm::mat4_cast(e.transform->orientation);
+        transform *= rotation;
+      }
+      
+      if (e.scale.has_value()) transform = glm::scale(transform, e.scale.value());
+
+      instances.push_back(transform);
     }
 
     auto [frameBufferX, frameBufferY] = mWindow.GetFrameBufferSize();
-    MapleRenderer::UBO ubo{
+    Renderer::UBO ubo{
       .view = mCam.GetView(),
       .proj = mCam.GetProjection(float(frameBufferX) / frameBufferY, 60.0f, 0.1f, 1000.0f),
       .time = static_cast<float>(mTime.TimeSinceStart()),
     };
 
     std::vector<std::variant<const std::string, TextureHndl>> usedResources = {mTex1};
-    std::array meshDraws = {MapleRenderer::MeshDraw{mMesh, instances, usedResources}};
+    std::array meshDraws = {Renderer::MeshDraw{mMesh, instances, usedResources}};
 
-    std::array materialDraws = {MapleRenderer::MaterialDraw{.material = mMaterial, .meshes = meshDraws}};
-    std::array passDraws = {MapleRenderer::PassDraw{
+    std::array materialDraws = {Renderer::MaterialDraw{.material = mMaterial, .meshes = meshDraws}};
+    std::array passDraws = {Renderer::PassDraw{
       .passName = "draw",
       .materialDraws = materialDraws,
     }};

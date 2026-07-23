@@ -29,6 +29,7 @@ class Input {
 
   void BeginFrame();
   void Bind(const std::string& name, const Binding& binding);
+  void Bind(const std::string& name, const std::vector<Binding>& bindings);
 
   bool Pressed(const std::string& name) const;
   bool Released(const std::string& name) const;

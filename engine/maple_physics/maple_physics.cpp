@@ -11,7 +11,6 @@
 #include "Jolt/Core/JobSystemThreadPool.h"
 #include "Jolt/Core/Reference.h"
 #include "Jolt/Geometry/Plane.h"
-#include "Jolt/Math/DMat44.h"
 #include "Jolt/Math/MathTypes.h"
 #include "Jolt/Math/Real.h"
 #include "Jolt/Math/Vec3.h"
@@ -81,7 +80,7 @@ class MapleBroadPhaseLayerInterface final : public JPH::BroadPhaseLayerInterface
   JPH::BroadPhaseLayer mObjectToBroadPhase[Layers::NUM_LAYERS];
 };
 
-struct MaplePhysics::Impl {
+struct Physics::Impl {
   JPH::PhysicsSystem physicsSystem;
 
   JPH::BodyInterface* bodyInterface = nullptr;
@@ -97,11 +96,11 @@ struct MaplePhysics::Impl {
   bool initialized = false;
 };
 
-MaplePhysics::MaplePhysics() : impl(std::make_unique<Impl>()) {}
+Physics::Physics() : impl(std::make_unique<Impl>()) {}
 
-MaplePhysics::~MaplePhysics() { Shutdown(); }
+Physics::~Physics() { Shutdown(); }
 
-bool MaplePhysics::Initialize(const glm::vec3& gravity) {
+bool Physics::Initialize(const glm::vec3& gravity) {
   // Jolt initialization
   JPH::RegisterDefaultAllocator();
   JPH::Factory::sInstance = new JPH::Factory();
@@ -145,7 +144,7 @@ bool MaplePhysics::Initialize(const glm::vec3& gravity) {
   return true;
 }
 
-void MaplePhysics::Shutdown() {
+void Physics::Shutdown() {
   if (!impl || !impl->initialized) return;
 
   impl->initialized = false;
@@ -156,7 +155,7 @@ void MaplePhysics::Shutdown() {
   JPH::Factory::sInstance = nullptr;
 }
 
-void MaplePhysics::Update(float deltaTime) {
+void Physics::Update(float deltaTime) {
   if (!impl->initialized) return;
 
   constexpr int collisionSteps = 1;
@@ -164,8 +163,8 @@ void MaplePhysics::Update(float deltaTime) {
   impl->physicsSystem.Update(deltaTime, collisionSteps, impl->tempAllocator.get(), impl->jobSystem.get());
 }
 
-JPH::Ref<JPH::Shape> constructShape(MaplePhysics::CollisionShape& shape) {
-  if (auto v = std::get_if<std::unique_ptr<MaplePhysics::CompoundShape>>(&shape)) {
+JPH::Ref<JPH::Shape> constructShape(Physics::CollisionShape& shape) {
+  if (auto v = std::get_if<std::unique_ptr<Physics::CompoundShape>>(&shape)) {
     auto settings = JPH::StaticCompoundShapeSettings();
     for (auto& child : v->get()->children) {
       settings.AddShape(hlp::ToJolt(child.position), hlp::ToJolt(child.orientation), constructShape(child.shape));
@@ -176,67 +175,67 @@ JPH::Ref<JPH::Shape> constructShape(MaplePhysics::CollisionShape& shape) {
     return JPH::Ref<JPH::Shape>(result.Get());
   }
 
-  if (auto v = std::get_if<MaplePhysics::Sphere>(&shape)) {
+  if (auto v = std::get_if<Physics::Sphere>(&shape)) {
     auto result = JPH::SphereShapeSettings(v->radius).Create();
     if (result.HasError()) MAPLE_FATAL("failed to create physics shape: '{}'", result.GetError());
     return JPH::Ref<JPH::Shape>(result.Get());
   }
 
-  if (auto v = std::get_if<MaplePhysics::Box>(&shape)) {
+  if (auto v = std::get_if<Physics::Box>(&shape)) {
     auto result = JPH::BoxShapeSettings(hlp::ToJolt(v->halfExtent)).Create();
     if (result.HasError()) MAPLE_FATAL("failed to create physics shape: '{}'", result.GetError());
     return JPH::Ref<JPH::Shape>(result.Get());
   }
 
-  if (auto v = std::get_if<MaplePhysics::Capsule>(&shape)) {
+  if (auto v = std::get_if<Physics::Capsule>(&shape)) {
     auto result = JPH::CapsuleShapeSettings(v->halfHeight, v->radius).Create();
     if (result.HasError()) MAPLE_FATAL("failed to create physics shape: '{}'", result.GetError());
     return JPH::Ref<JPH::Shape>(result.Get());
   }
 
-  if (auto v = std::get_if<MaplePhysics::TaperedCapsule>(&shape)) {
+  if (auto v = std::get_if<Physics::TaperedCapsule>(&shape)) {
     auto result = JPH::TaperedCapsuleShapeSettings(v->halfHeight, v->topRadius, v->bottomRadius).Create();
     if (result.HasError()) MAPLE_FATAL("failed to create physics shape: '{}'", result.GetError());
     return JPH::Ref<JPH::Shape>(result.Get());
   }
 
-  if (auto v = std::get_if<MaplePhysics::Cylinder>(&shape)) {
+  if (auto v = std::get_if<Physics::Cylinder>(&shape)) {
     auto result = JPH::CylinderShapeSettings(v->halfHeight, v->radius).Create();
     if (result.HasError()) MAPLE_FATAL("failed to create physics shape: '{}'", result.GetError());
     return JPH::Ref<JPH::Shape>(result.Get());
   }
 
-  if (auto v = std::get_if<MaplePhysics::TaperedCylinder>(&shape)) {
+  if (auto v = std::get_if<Physics::TaperedCylinder>(&shape)) {
     auto result = JPH::TaperedCylinderShapeSettings(v->halfHeight, v->topRadius, v->bottomRadius).Create();
     if (result.HasError()) MAPLE_FATAL("failed to create physics shape: '{}'", result.GetError());
     return JPH::Ref<JPH::Shape>(result.Get());
   }
 
-  if (auto v = std::get_if<MaplePhysics::ConvexHull>(&shape)) {
+  if (auto v = std::get_if<Physics::ConvexHull>(&shape)) {
     auto result = JPH::ConvexHullShapeSettings(reinterpret_cast<JPH::Vec3*>(v->points.data()), v->points.size()).Create();
     if (result.HasError()) MAPLE_FATAL("failed to create physics shape: '{}'", result.GetError());
     return JPH::Ref<JPH::Shape>(result.Get());
   }
 
-  if (auto v = std::get_if<MaplePhysics::Triangle>(&shape)) {
+  if (auto v = std::get_if<Physics::Triangle>(&shape)) {
     auto result = JPH::TriangleShapeSettings(hlp::ToJolt(v->a), hlp::ToJolt(v->b), hlp::ToJolt(v->c)).Create();
     if (result.HasError()) MAPLE_FATAL("failed to create physics shape: '{}'", result.GetError());
     return JPH::Ref<JPH::Shape>(result.Get());
   }
 
-  if (auto v = std::get_if<MaplePhysics::Plane>(&shape)) {
+  if (auto v = std::get_if<Physics::Plane>(&shape)) {
     auto result = JPH::PlaneShapeSettings(JPH::Plane(hlp::ToJolt(v->normal), v->distance)).Create();
     if (result.HasError()) MAPLE_FATAL("failed to create physics shape: '{}'", result.GetError());
     return JPH::Ref<JPH::Shape>(result.Get());
   }
 
-  if (MaplePhysics::HeightField* v = std::get_if<MaplePhysics::HeightField>(&shape)) {
+  if (Physics::HeightField* v = std::get_if<Physics::HeightField>(&shape)) {
     auto result = JPH::HeightFieldShapeSettings(v->heights.get(), hlp::ToJolt(glm::vec3(0)), hlp::ToJolt(glm::vec3(1)), v->N).Create();
     if (result.HasError()) MAPLE_FATAL("failed to create physics shape: '{}'", result.GetError());
     return JPH::Ref<JPH::Shape>(result.Get());
   }
 
-  if (MaplePhysics::Mesh* v = std::get_if<MaplePhysics::Mesh>(&shape)) {
+  if (Physics::Mesh* v = std::get_if<Physics::Mesh>(&shape)) {
     JPH::VertexList vertices;
     vertices.reserve(v->vertices.size());
 
@@ -255,10 +254,10 @@ JPH::Ref<JPH::Shape> constructShape(MaplePhysics::CollisionShape& shape) {
   MAPLE_FATAL("unknown Collision Shape type");
 }
 
-PhysicsBodyID MaplePhysics::CreateRigidBody(BodyInfo& info) {
+Physics::BodyID Physics::CreateRigidBody(BodyInfo& info) {
   if (!impl->initialized) return 0;
   if (!info.Validate()) MAPLE_FATAL("invalid physics body info");
-  bool isStaticShape = std::holds_alternative<MaplePhysics::Mesh>(info.shape) || std::holds_alternative<MaplePhysics::HeightField>(info.shape);
+  bool isStaticShape = std::holds_alternative<Physics::Mesh>(info.shape) || std::holds_alternative<Physics::HeightField>(info.shape);
   if (isStaticShape && info.motionType != MotionType::Static) MAPLE_FATAL("mesh shape cannot be used on non-static geometry");
 
   auto shape = constructShape(info.shape);
@@ -288,7 +287,7 @@ PhysicsBodyID MaplePhysics::CreateRigidBody(BodyInfo& info) {
   return body->GetID().GetIndexAndSequenceNumber();
 }
 
-void MaplePhysics::DestroyRigidBody(PhysicsBodyID id) {
+void Physics::DestroyRigidBody(BodyID id) {
   if (!impl->initialized) return;
 
   JPH::BodyID bodyID(id);
@@ -297,40 +296,38 @@ void MaplePhysics::DestroyRigidBody(PhysicsBodyID id) {
   impl->bodyInterface->DestroyBody(bodyID);
 }
 
-uint64_t MaplePhysics::GetBodyEntity(PhysicsBodyID id) {
-  return impl->bodyInterface->GetUserData(static_cast<JPH::BodyID>(id));
-}
+uint64_t Physics::GetBodyEntity(BodyID id) { return impl->bodyInterface->GetUserData(static_cast<JPH::BodyID>(id)); }
 
-glm::vec3 MaplePhysics::GetBodyPosition(PhysicsBodyID id) const {
+glm::vec3 Physics::GetBodyPosition(BodyID id) const {
   JPH::RVec3 v = impl->bodyInterface->GetPosition(static_cast<JPH::BodyID>(id));
   return glm::vec3(v.GetX(), v.GetY(), v.GetZ());
 }
 
-glm::quat MaplePhysics::GetBodyRotation(PhysicsBodyID id) const {
+glm::quat Physics::GetBodyRotation(BodyID id) const {
   JPH::Quat v = impl->bodyInterface->GetRotation(static_cast<JPH::BodyID>(id));
   return glm::quat(v.GetW(), v.GetX(), v.GetY(), v.GetZ());
 }
 
-void MaplePhysics::SetBodyPosition(PhysicsBodyID id, const glm::vec3& pos) {
+void Physics::SetBodyPosition(BodyID id, const glm::vec3& pos) {
   JPH::BodyID bodyID(id);
 
   impl->bodyInterface->SetPosition(bodyID, JPH::RVec3(pos.x, pos.y, pos.z), JPH::EActivation::Activate);
 }
 
-void MaplePhysics::SetBodyRotation(PhysicsBodyID id, const glm::quat& quat) {
+void Physics::SetBodyRotation(BodyID id, const glm::quat& quat) {
   JPH::BodyID bodyID(id);
 
   impl->bodyInterface->SetRotation(bodyID, JPH::Quat(quat.x, quat.y, quat.z, quat.w), JPH::EActivation::Activate);
 }
 
-void MaplePhysics::ApplyForce(PhysicsBodyID id, const glm::vec3& force) {
+void Physics::ApplyForce(BodyID id, const glm::vec3& force) {
   JPH::BodyID bodyID(id);
 
   impl->bodyInterface->ActivateBody(bodyID);
   impl->bodyInterface->AddForce(bodyID, JPH::Vec3(force.x, force.y, force.z));
 }
 
-std::optional<MaplePhysics::RayCastResult> MaplePhysics::Raycast(const glm::vec3& origin, const glm::vec3& dir, float distance) {
+std::optional<Physics::RayCastResult> Physics::Raycast(const glm::vec3& origin, const glm::vec3& dir, float distance) {
   JPH::RayCastResult result;
   JPH::RRayCast ray(JPH::RVec3(origin.x, origin.y, origin.z), JPH::Vec3(dir.x, dir.y, dir.z) * distance);
   auto& query = impl->physicsSystem.GetNarrowPhaseQuery();
@@ -340,13 +337,13 @@ std::optional<MaplePhysics::RayCastResult> MaplePhysics::Raycast(const glm::vec3
 
   JPH::RVec3 hitPositionJolt = ray.GetPointOnRay(result.mFraction);
 
-  return MaplePhysics::RayCastResult{
+  return Physics::RayCastResult{
     .bodyID = result.mBodyID.GetIndexAndSequenceNumber(),
     .position = glm::vec3(hitPositionJolt.GetX(), hitPositionJolt.GetY(), hitPositionJolt.GetZ()),
   };
 }
 
-std::optional<MaplePhysics::RayCastResultWithNormal> MaplePhysics::RaycastWNormal(const glm::vec3& origin, const glm::vec3& dir, float distance) {
+std::optional<Physics::RayCastResultWithNormal> Physics::RaycastWNormal(const glm::vec3& origin, const glm::vec3& dir, float distance) {
   JPH::RayCastResult result;
   JPH::RRayCast ray(JPH::RVec3(origin.x, origin.y, origin.z), JPH::Vec3(dir.x, dir.y, dir.z) * distance);
   auto& query = impl->physicsSystem.GetNarrowPhaseQuery();
@@ -363,24 +360,24 @@ std::optional<MaplePhysics::RayCastResultWithNormal> MaplePhysics::RaycastWNorma
 
   JPH::Vec3 normal = body.GetWorldSpaceSurfaceNormal(result.mSubShapeID2, hitPositionJolt);
 
-  return MaplePhysics::RayCastResultWithNormal{
+  return Physics::RayCastResultWithNormal{
     .bodyID = result.mBodyID.GetIndexAndSequenceNumber(),
     .position = glm::vec3(hitPositionJolt.GetX(), hitPositionJolt.GetY(), hitPositionJolt.GetZ()),
     .normal = glm::vec3(normal.GetX(), normal.GetY(), normal.GetZ()),
   };
 }
 
-std::vector<PhysicsBodyID> MaplePhysics::OverlapSphere(Sphere shape, const glm::vec3& origin) {
-  std::vector<PhysicsBodyID> result;
+std::vector<Physics::BodyID> Physics::OverlapSphere(Sphere shape, const glm::vec3& origin) {
+  std::vector<BodyID> result;
 
-  MaplePhysics::CollisionShape sh = shape;
+  Physics::CollisionShape sh = shape;
   auto joltShape = constructShape(sh);
 
   class Collector : public JPH::CollideShapeCollector {
    public:
-    std::vector<PhysicsBodyID>& results;
+    std::vector<BodyID>& results;
 
-    Collector(std::vector<PhysicsBodyID>& results) : results(results) {}
+    Collector(std::vector<BodyID>& results) : results(results) {}
 
     void AddHit(const JPH::CollideShapeResult& result) override { results.push_back(result.mBodyID2.GetIndexAndSequenceNumber()); }
   };
@@ -388,9 +385,9 @@ std::vector<PhysicsBodyID> MaplePhysics::OverlapSphere(Sphere shape, const glm::
   Collector collector(result);
 
   JPH::RMat44 CoMTrans = JPH::RMat44::sIdentity();
-  CoMTrans.SetTranslation(JPH::RVec3Arg(origin.x, origin.y, origin.z)); // TODO: fix
+  CoMTrans.SetTranslation(JPH::RVec3Arg(origin.x, origin.y, origin.z));  // TODO: fix
   JPH::CollideShapeSettings settings;
-  
+
   auto& query = impl->physicsSystem.GetNarrowPhaseQuery();
   query.CollideShape(joltShape, JPH::Vec3::sReplicate(1.0f), CoMTrans, settings, JPH::RVec3::sZero(), collector);
 
