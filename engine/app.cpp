@@ -56,7 +56,7 @@ void App::Init() {
 
   mCam.SetPosition(glm::vec3(0));
 
-  mPhysics.Initialize(glm::vec3(0, -9.81, 0));
+  mPhysics = Physics({glm::vec3(0, -9.81, 0)});
 
   mRenderer = Renderer(
     mWindow.RequiredVkInstanceExtensions(),
@@ -154,8 +154,7 @@ void App::Init() {
     .numVerts = static_cast<uint32_t>(verts.size()),
   });
 
-  mMaterial = mRenderer.CreateMaterial(
-    AssetLoader::LoadFileStr("assets/shaders/shader.slang"), "shader", {.rasterizer = {.cullMode = MaterialBuilderData::CullModeFlagBits::None}});
+  mMaterial = mRenderer.CreateMaterial(AssetLoader::LoadFileStr("assets/shaders/shader.slang"), "shader", {});
 
   std::array colorFormats = {Format::R8G8B8A8_SRGB, Format::B8G8R8A8_SRGB};
   auto format = mRenderer.FindFirstSupportedTextureFormat(colorFormats);
@@ -218,11 +217,12 @@ void App::Run() {
     .scale = glm::vec3(1000, 1, 1000),
     .renderable = {.mesh = mMesh, .material = mMaterial, .textures = &textureHandles},
   });
-  auto data = Physics::BodyInfo{floor, Physics::Plane{}, Physics::MotionType::Static};
-  entities.Get(floor).rigidBody = mPhysics.CreateRigidBody(data);
+  auto floorShapes = {Physics::CollisionShape{Physics::Box(glm::vec3(500, 1, 500))}};
+  auto data = Physics::BodyInfo{.entityID = floor, .shapes = floorShapes, .motionType = Physics::MotionType::Static};
+  entities.Get(floor).rigidBody = mPhysics.CreateBody(data);
 
-  auto shape = Physics::Box{};
-  for (size_t i = 0; i < 1000; i++) {
+  auto shapes = {Physics::CollisionShape{.shape = Physics::Box{}, .restitution = 0.2f}};
+  for (size_t i = 0; i < 5000; i++) {
     auto dir = glm::normalize(glm::vec3(rng.NextFloat(-1), rng.NextFloat(), rng.NextFloat(-1)));
     auto speed = rng.NextFloat() * 500.0f + 50.0f;
     auto pos = dir * speed;
@@ -233,13 +233,12 @@ void App::Run() {
     auto ent = entities.Add({.renderable = {.mesh = mMesh, .material = mMaterial, .textures = &textureHandles}});
     auto bodyInfo = Physics::BodyInfo{
       .entityID = ent,
-      .shape = shape,
+      .shapes = shapes,
       .motionType = Physics::MotionType::Dynamic,
       .position = pos,
       .orientation = glm::normalize(glm::angleAxis(angle, axis)),
-      .restitution = 0.2f,
     };
-    entities.Get(ent).rigidBody = mPhysics.CreateRigidBody(bodyInfo);
+    entities.Get(ent).rigidBody = mPhysics.CreateBody(bodyInfo);
   }
 
   std::vector<glm::mat4> instances;
@@ -274,7 +273,7 @@ void App::Run() {
     auto movementLength = glm::length(movement);
     if (movementLength > 1.0f * mTime.DeltaTime()) movement /= movementLength;
     movement *= movementSpeed * mTime.DeltaTime();
-    mCam.SetPosition(mCam.GetPosition() + movement);
+    mCam.SetPosition(mCam.GetPosition() + glm::dvec3(movement));
 
     glm::vec2 look(mInput.Value("look_horizontal"), mInput.Value("look_vertical"));
     look *= gamePadSens * mTime.DeltaTime();
@@ -283,21 +282,27 @@ void App::Run() {
     mCam.Pitch(look.y);
     mCam.Roll(mInput.Value("roll") * rollSpeed * mTime.DeltaTime());
 
+    auto posRelativeToCam = [&](const glm::dvec3& v) { return glm::vec3(v - mCam.GetPosition()); };
+
     if (mInput.Released("upward")) {
       mAudio.PlayClip(clip, {});
     }
     if (mInput.Value("click") > 0.5) {
-      auto rayResult = mPhysics.Raycast(mCam.GetPosition(), mCam.Forward(), 1000.0f);
+      Physics::CastInfo castInfo{};
+      castInfo.origin = mCam.GetPosition();
+      castInfo.translation = mCam.Forward() * 1000.0f;
+      auto rayResult = mPhysics.CastRay(castInfo);
       if (rayResult != std::nullopt) {
-        instances.push_back(glm::scale(glm::translate(glm::mat4(1.0f), rayResult->position), glm::vec3(0.1f)));
-        auto overlaps = mPhysics.OverlapSphere({.radius = 5}, rayResult->position);
+        instances.push_back(glm::scale(glm::translate(glm::mat4(1.0f), posRelativeToCam(rayResult->position)), glm::vec3(0.1f)));
+        auto overlaps = mPhysics.OverlapSphere({rayResult->position}, 5.0f);
         for (auto body : overlaps) {
-          instances.push_back(glm::scale(glm::translate(glm::mat4(1.0f), mPhysics.GetBodyPosition(body)), glm::vec3(2.0f)));
+          auto [pos, rot] = mPhysics.GetBodyTransform(body);
+          instances.push_back(glm::scale(glm::translate(glm::mat4(1.0f), posRelativeToCam(pos)), glm::vec3(2.0f)));
           if (mInput.Value("delete") < 0.5) continue;
           auto ent = mPhysics.GetBodyEntity(body);
           if (ent == floor) continue;
           MAPLE_DEBUG("removing: {}", ent);
-          mPhysics.DestroyRigidBody(body);
+          mPhysics.DestroyBody(body);
           entities.Remove(ent);
         }
       }
@@ -316,19 +321,20 @@ void App::Run() {
       if (!entities.IsValid(i)) continue;
       auto& e = entities.Get(i);
 
-      MAPLE_ASSERT(e.transform.has_value() || e.rigidBody != 0, "entity required to have either a transform or rigidbody");
+      MAPLE_ASSERT(e.transform.has_value() || e.rigidBody.id != e.rigidBody.INVALID_ID, "entity required to have either a transform or rigidbody");
 
       auto physId = e.rigidBody;
       glm::mat4 transform(1.0f);
-      transform = glm::translate(transform, mPhysics.GetBodyPosition(physId));
-      glm::mat4 rotation = glm::mat4_cast(mPhysics.GetBodyRotation(physId));
+      auto [pos, rot] = mPhysics.GetBodyTransform(physId);
+      transform = glm::translate(transform, posRelativeToCam(pos));
+      glm::mat4 rotation = glm::mat4_cast(rot);
       transform *= rotation;
       if (e.transform.has_value()) {
         transform = glm::translate(transform, e.transform->pos);
         glm::mat4 rotation = glm::mat4_cast(e.transform->orientation);
         transform *= rotation;
       }
-      
+
       if (e.scale.has_value()) transform = glm::scale(transform, e.scale.value());
 
       instances.push_back(transform);
@@ -336,7 +342,7 @@ void App::Run() {
 
     auto [frameBufferX, frameBufferY] = mWindow.GetFrameBufferSize();
     Renderer::UBO ubo{
-      .view = mCam.GetView(),
+      .view = mCam.GetViewRotationOnly(),
       .proj = mCam.GetProjection(float(frameBufferX) / frameBufferY, 60.0f, 0.1f, 1000.0f),
       .time = static_cast<float>(mTime.TimeSinceStart()),
     };

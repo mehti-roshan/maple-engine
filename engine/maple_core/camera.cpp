@@ -1,27 +1,26 @@
 #include "camera.h"
 
 namespace maple {
-glm::vec3 Camera::GetPosition() const { return mPosition; }
+const glm::dvec3& Camera::GetPosition() const { return mPosition; }
 void Camera::SetPosition(const glm::vec3& position) { mPosition = position; }
 
 void Camera::Pitch(float angle) { mOrientation = glm::normalize(glm::angleAxis(angle, Right()) * mOrientation); }
-
 void Camera::Yaw(float angle) { mOrientation = glm::normalize(glm::angleAxis(angle, Up()) * mOrientation); }
-
 void Camera::Roll(float angle) { mOrientation = glm::normalize(glm::angleAxis(angle, Forward()) * mOrientation); }
 
 glm::mat4 Camera::GetView() const {
-  glm::mat4 rotation = glm::mat4_cast(glm::conjugate(mOrientation));
-  glm::mat4 translation = glm::translate(glm::mat4(1.0f), -mPosition);
+  glm::mat4 translation = glm::translate(glm::mat4(1.0f), glm::vec3(-mPosition));
+  return GetViewRotationOnly() * translation;
+}
 
-  return rotation * translation;
+glm::mat4 Camera::GetViewRotationOnly() const {
+  glm::mat4 rotation = glm::mat4_cast(glm::conjugate(mOrientation));
+  return rotation;
 }
 
 glm::mat4 Camera::GetProjection(float aspectRatio, float fov, float nearPlane, float farPlane) const {
   glm::mat4 proj = glm::perspective(glm::radians(fov), aspectRatio, nearPlane, farPlane);
-
   proj[1][1] *= -1.0f;  // Vulkan flip y coordinates
-
   return proj;
 }
 

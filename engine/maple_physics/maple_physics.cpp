@@ -1,397 +1,355 @@
 #include "maple_physics.h"
 
+#include <array>
+#include <bit>
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <optional>
+#include <thread>
+#include <unordered_map>
+#include <utility>
 #include <variant>
+#include <vector>
 
 #include "../maple_logging/log_macros.h"
-#include "Jolt/Jolt.h"
-#include "Jolt/Core/Factory.h"
-#include "Jolt/Core/JobSystemThreadPool.h"
-#include "Jolt/Core/Reference.h"
-#include "Jolt/Geometry/Plane.h"
-#include "Jolt/Math/MathTypes.h"
-#include "Jolt/Math/Real.h"
-#include "Jolt/Math/Vec3.h"
-#include "Jolt/Physics/Body/Body.h"
-#include "Jolt/Physics/Body/BodyCreationSettings.h"
-#include "Jolt/Physics/Body/BodyInterface.h"
-#include "Jolt/Physics/Body/BodyLock.h"
-#include "Jolt/Physics/Collision/CastResult.h"
-#include "Jolt/Physics/Collision/CollideShape.h"
-#include "Jolt/Physics/Collision/RayCast.h"
-#include "Jolt/Physics/Collision/Shape/BoxShape.h"
-#include "Jolt/Physics/Collision/Shape/CapsuleShape.h"
-#include "Jolt/Physics/Collision/Shape/ConvexHullShape.h"
-#include "Jolt/Physics/Collision/Shape/CylinderShape.h"
-#include "Jolt/Physics/Collision/Shape/HeightFieldShape.h"
-#include "Jolt/Physics/Collision/Shape/MeshShape.h"
-#include "Jolt/Physics/Collision/Shape/PlaneShape.h"
-#include "Jolt/Physics/Collision/Shape/Shape.h"
-#include "Jolt/Physics/Collision/Shape/SphereShape.h"
-#include "Jolt/Physics/Collision/Shape/StaticCompoundShape.h"
-#include "Jolt/Physics/Collision/Shape/TaperedCapsuleShape.h"
-#include "Jolt/Physics/Collision/Shape/TaperedCylinderShape.h"
-#include "Jolt/Physics/Collision/Shape/TriangleShape.h"
-#include "Jolt/Physics/PhysicsSystem.h"
-#include "Jolt/RegisterTypes.h"
-#include "helpers.h"
+#include "box3d/base.h"
+#include "box3d/box3d.h"
+#include "box3d/collision.h"
+#include "box3d/id.h"
+#include "box3d/math_functions.h"
+#include "box3d/types.h"
 
 namespace maple {
 
-namespace Layers {
-static constexpr JPH::ObjectLayer NON_MOVING = 0;
-static constexpr JPH::ObjectLayer MOVING = 1;
-static constexpr uint32_t NUM_LAYERS = 2;
+b3Vec3 toB3Vec3(const glm::vec3& v) { return b3Vec3{.x = v.x, .y = v.y, .z = v.z}; }
+b3Pos toB3Vec3(const glm::dvec3& v) { return b3Pos{.x = v.x, .y = v.y, .z = v.z}; }
+glm::vec3 vec3FromB3(const b3Vec3& v) { return glm::vec3(v.x, v.y, v.z); }
+glm::dvec3 vec3FromB3(const b3Pos& v) { return glm::dvec3(v.x, v.y, v.z); }
+b3Quat toB3Quat(const glm::quat& v) { return b3Quat{.v = {.x = v.x, .y = v.y, .z = v.z}, .s = v.w}; }
+glm::quat quatFromB3(const b3Quat& v) { return glm::quat(v.s, v.v.x, v.v.y, v.v.z); }
+b3BodyId toB3BodyId(Physics::BodyID id) { return std::bit_cast<b3BodyId>(id.id); }
+Physics::BodyID BodyIdFromB3(b3BodyId id) { return std::bit_cast<Physics::BodyID>(id); }
+void* toB3UserData(Physics::EntityID v) { return reinterpret_cast<void*>(v); }
+Physics::EntityID userDataFromB3(void* v) { return reinterpret_cast<Physics::EntityID>(v); }
 
-}  // namespace Layers
+struct Physics::Impl {
+  b3WorldId mWorldId = b3_nullWorldId;
+  std::unordered_map<uint64_t, std::vector<std::variant<b3HullData*, b3MeshData*, b3HeightFieldData*>>> mBodyShapeAllocs;
+};
 
-class MapleBroadPhaseLayerInterface final : public JPH::BroadPhaseLayerInterface {
- public:
-  MapleBroadPhaseLayerInterface() {
-    mObjectToBroadPhase[Layers::NON_MOVING] = JPH::BroadPhaseLayer(0);
+Physics::Physics() = default;
+Physics::~Physics() { Destroy(); }
 
-    mObjectToBroadPhase[Layers::MOVING] = JPH::BroadPhaseLayer(1);
-  }
+Physics::Physics(Physics&&) noexcept = default;
+Physics& Physics::operator=(Physics&&) noexcept = default;
 
-  uint GetNumBroadPhaseLayers() const override { return 2; }
+Physics::Physics(const CreateInfo& info) : impl(std::make_unique<Impl>()) {
+  b3WorldDef worldDef = b3DefaultWorldDef();
+  worldDef.gravity = std::bit_cast<b3Vec3>(info.gravity);
+  worldDef.hitEventThreshold = info.hitEventThreshold;
+  worldDef.workerCount = std::thread::hardware_concurrency();
 
-  JPH::BroadPhaseLayer GetBroadPhaseLayer(JPH::ObjectLayer layer) const override { return mObjectToBroadPhase[layer]; }
+  impl->mWorldId = b3CreateWorld(&worldDef);
+}
 
-#if defined(JPH_EXTERNAL_PROFILE) || defined(JPH_PROFILE_ENABLED)
+void Physics::Destroy() {
+  if (!impl) return;
+  if (B3_IS_NULL(impl->mWorldId)) return;
+  b3DestroyWorld(impl->mWorldId);
+  impl->mWorldId = b3_nullWorldId;
+}
 
-  const char* GetBroadPhaseLayerName(JPH::BroadPhaseLayer layer) const override {
-    switch (static_cast<uint8_t>(layer)) {
-      case 0:
-        return "STATIC";
+void Physics::Update(float timeStep, uint32_t subStepCount) {
+  MAPLE_ASSERT(B3_IS_NON_NULL(impl->mWorldId), "physics world id was null");
+  b3World_Step(impl->mWorldId, timeStep, subStepCount);
+}
 
-      case 1:
-        return "DYNAMIC";
+Physics::BodyID Physics::CreateBody(const BodyInfo& info) {
+  MAPLE_ASSERT(B3_IS_NON_NULL(impl->mWorldId), "physics world id was null");
+  if (!info.Validate()) MAPLE_FATAL("invalid physics body info");
 
-      default:
-        return "UNKNOWN";
+  auto bodyDef = b3DefaultBodyDef();
+  bodyDef.userData = toB3UserData(info.entityID);
+  bodyDef.position = b3Pos{.x = static_cast<typeof(b3Pos::x)>(info.position.x),
+                           .y = static_cast<typeof(b3Pos::y)>(info.position.y),
+                           .z = static_cast<typeof(b3Pos::z)>(info.position.z)};
+  bodyDef.rotation = toB3Quat(info.orientation);
+  bodyDef.linearDamping = info.linearDamping;
+  bodyDef.angularDamping = info.angularDamping;
+  bodyDef.type =
+    info.motionType == MotionType::Static ? b3_staticBody : (info.motionType == MotionType::Kinematic ? b3_kinematicBody : b3_dynamicBody);
+  bodyDef.isBullet = info.motionQuality == MotionQuality::Continuous;
+
+  auto bodyID = b3CreateBody(impl->mWorldId, &bodyDef);
+
+  for (auto& v : info.shapes) {
+    b3ShapeDef shapeDef = b3DefaultShapeDef();
+    shapeDef.baseMaterial.friction = v.friction;
+    shapeDef.baseMaterial.restitution = v.restitution;
+    shapeDef.enableHitEvents = v.enableHitEvents;
+    shapeDef.enableSensorEvents = v.enableSensorEvents;
+    shapeDef.isSensor = v.isSensor;
+    if (v.isSensor && !v.enableSensorEvents) MAPLE_WARN("physics shape created as sensor but doesn't have sensor events enabled");
+    shapeDef.filter.categoryBits = v.categoryBits;
+    shapeDef.filter.maskBits = v.maskBits;
+
+    auto& shape = v.shape;
+
+    if (auto* v = std::get_if<Box>(&shape)) {
+      auto hull = b3MakeBoxHull(v->halfExtent.x, v->halfExtent.y, v->halfExtent.z);
+      b3CreateHullShape(bodyID, &shapeDef, &hull.base);
+      break;
+    }
+
+    if (auto* v = std::get_if<Sphere>(&shape)) {
+      b3Sphere sphere{b3Vec3{0.0f, 0.0f, 0.0f}, v->radius};
+      b3CreateSphereShape(bodyID, &shapeDef, &sphere);
+      break;
+    }
+
+    if (auto v = std::get_if<Cylinder>(&shape)) {
+      MAPLE_FATAL("unimplmeneted physics shape");
+      auto cylinder = b3CreateCylinder(v->height, v->radius, v->yOffset, v->sides);
+      MAPLE_ASSERT(cylinder, "invalid cylinder hull shape");
+      b3CreateHullShape(bodyID, &shapeDef, cylinder);
+
+      auto it = impl->mBodyShapeAllocs.find(std::bit_cast<uint64_t>(bodyID));
+      if (it == impl->mBodyShapeAllocs.end()) {
+        impl->mBodyShapeAllocs[std::bit_cast<uint64_t>(bodyID)] = {cylinder};
+      } else {
+        it->second.push_back(cylinder);
+      }
+
+      break;
+    }
+
+    if (auto v = std::get_if<ConvexHull>(&shape)) {
+      auto hull = b3CreateHull(reinterpret_cast<const b3Vec3*>(v->points.data()), v->points.size(), v->points.size());
+      MAPLE_ASSERT(hull, "invalid convex hull shape");
+      b3CreateHullShape(bodyID, &shapeDef, hull);
+
+      auto it = impl->mBodyShapeAllocs.find(std::bit_cast<uint64_t>(bodyID));
+      if (it == impl->mBodyShapeAllocs.end()) {
+        impl->mBodyShapeAllocs[std::bit_cast<uint64_t>(bodyID)] = {hull};
+      } else {
+        it->second.push_back(hull);
+      }
+
+      break;
+    }
+
+    if (auto v = std::get_if<Mesh>(&shape)) {
+      b3MeshDef def = {};
+      // doing this copy because the box3d pointers are non-const
+      auto vertices = std::make_unique<b3Vec3[]>(v->vertices.size());
+      std::memcpy(vertices.get(), v->vertices.data(), v->vertices.size() * sizeof(decltype(v->vertices)::value_type));
+      auto indices = std::make_unique<int32_t[]>(v->indices.size());
+      std::memcpy(indices.get(), v->indices.data(), v->indices.size() * sizeof(decltype(v->indices)::value_type));
+
+      def.vertices = vertices.get();
+      def.vertexCount = v->vertices.size();
+      def.indices = indices.get();  // 3 per triangle
+      def.triangleCount = v->indices.size() / 3;
+      def.weldVertices = true;
+      def.identifyEdges = true;  // adjacency info for smooth inter-triangle normals
+
+      b3MeshData* mesh = b3CreateMesh(&def, NULL, 0);
+      MAPLE_ASSERT(mesh, "invalid mesh shape");
+      b3ShapeId meshID = b3CreateMeshShape(bodyID, &shapeDef, mesh, {1.0f, 1.0f, 1.0f});
+
+      auto it = impl->mBodyShapeAllocs.find(std::bit_cast<uint64_t>(bodyID));
+      if (it == impl->mBodyShapeAllocs.end()) {
+        impl->mBodyShapeAllocs[std::bit_cast<uint64_t>(bodyID)] = {mesh};
+      } else {
+        it->second.push_back(mesh);
+      }
+
+      break;
+    }
+
+    if (auto v = std::get_if<HeightField>(&shape)) {
+      b3HeightFieldDef def = {0};
+      def.heights = v->heights.get();
+      def.countX = v->sizeX;
+      def.countZ = v->sizeZ;
+      def.scale = (b3Vec3){1.0f, 1.0f, 1.0f};
+      def.globalMinimumHeight = -10.0f;
+      def.globalMaximumHeight = 50.0f;
+
+      b3HeightFieldData* hf = b3CreateHeightField(&def);
+      b3ShapeId id = b3CreateHeightFieldShape(bodyID, &shapeDef, hf);
+
+      auto it = impl->mBodyShapeAllocs.find(std::bit_cast<uint64_t>(bodyID));
+      if (it == impl->mBodyShapeAllocs.end()) {
+        impl->mBodyShapeAllocs[std::bit_cast<uint64_t>(bodyID)] = {hf};
+      } else {
+        it->second.push_back(hf);
+      }
+
+      break;
     }
   }
 
-#endif
+  return {.id = std::bit_cast<uint64_t>(bodyID)};
+}
 
- private:
-  JPH::BroadPhaseLayer mObjectToBroadPhase[Layers::NUM_LAYERS];
+void Physics::DestroyBody(BodyID id) {
+  MAPLE_ASSERT(B3_IS_NON_NULL(impl->mWorldId), "physics world id was null");
+
+  b3DestroyBody(toB3BodyId(id));
+
+  auto meshIt = impl->mBodyShapeAllocs.find(id.id);
+  if (meshIt != impl->mBodyShapeAllocs.end()) {
+    for (auto ptr : meshIt->second) {
+      if (auto v = std::get_if<b3HullData*>(&ptr)) {
+        b3DestroyHull(*v);
+        continue;
+      }
+
+      if (auto v = std::get_if<b3MeshData*>(&ptr)) {
+        b3DestroyMesh(*v);
+        continue;
+      }
+
+      if (auto v = std::get_if<b3HeightFieldData*>(&ptr)) {
+        b3DestroyHeightField(*v);
+        continue;
+      }
+    }
+
+    impl->mBodyShapeAllocs.erase(meshIt);
+  }
+}
+
+Physics::EntityID Physics::GetBodyEntity(BodyID id) { return userDataFromB3(b3Body_GetUserData(toB3BodyId(id))); }
+std::pair<glm::dvec3, glm::quat> Physics::GetBodyTransform(BodyID id) const {
+  auto transform = b3Body_GetTransform(toB3BodyId(id));
+  return std::make_pair(vec3FromB3(transform.p), quatFromB3(transform.q));
+}
+void Physics::SetBodyTransform(BodyID id, const glm::dvec3& pos, const glm::quat& quat) {
+  b3Body_SetTransform(toB3BodyId(id), toB3Vec3(pos), toB3Quat(quat));
+}
+
+void Physics::ApplyForce(BodyID id, const glm::vec3& force) { b3Body_ApplyForceToCenter(toB3BodyId(id), toB3Vec3(force), true); }
+void Physics::ApplyForceAtPosition(BodyID id, const glm::vec3& force, const glm::dvec3& worldPoint) {
+  b3Body_ApplyForce(toB3BodyId(id), toB3Vec3(force), toB3Vec3(worldPoint), true);
+}
+
+std::optional<Physics::CastResult> Physics::CastRay(const CastInfo& info) const {
+  MAPLE_ASSERT(B3_IS_NON_NULL(impl->mWorldId), "physics world id was null");
+  auto result = b3World_CastRayClosest(
+    impl->mWorldId, toB3Vec3(info.origin), toB3Vec3(info.translation), b3QueryFilter{.categoryBits = info.categoryBits, .maskBits = info.maskBits});
+  if (!result.hit) return std::nullopt;
+
+  return CastResult{
+    .bodyID = BodyIdFromB3(b3Shape_GetBody(result.shapeId)),
+    .position = vec3FromB3(result.point),
+    .normal = vec3FromB3(result.normal),
+  };
+}
+
+struct CastContext {
+  b3ShapeId shapeId;
+  b3Pos point;
+  b3Vec3 normal;
+  float fraction;
 };
 
-struct Physics::Impl {
-  JPH::PhysicsSystem physicsSystem;
+float ShapeCastCallback(
+  b3ShapeId shapeId, b3Pos point, b3Vec3 normal, float fraction, uint64_t userMaterialId, int triangleIndex, int childIndex, void* context) {
+  CastContext* castCtx = reinterpret_cast<CastContext*>(context);
+  castCtx->shapeId = shapeId;
+  castCtx->point = point;
+  castCtx->normal = normal;
+  castCtx->fraction = fraction;
+  return fraction;
+}
 
-  JPH::BodyInterface* bodyInterface = nullptr;
+std::optional<Physics::CastResult> Physics::CastShape(const ShapeCastInfo& info) const {
+  b3ShapeProxy proxy;
+  proxy.radius = info.pointsRadii;
+  proxy.count = info.points.size();
+  proxy.points = reinterpret_cast<const b3Vec3*>(info.points.data());
 
-  std::unique_ptr<JPH::ObjectVsBroadPhaseLayerFilter> objectVsBroadPhaseLayerFilter;
-  std::unique_ptr<JPH::ObjectLayerPairFilter> objectLayerPairFilter;
+  CastContext ctx{0};
 
-  std::unique_ptr<MapleBroadPhaseLayerInterface> broadPhaseLayerInterface;
+  b3World_CastShape(impl->mWorldId,
+                    toB3Vec3(info.origin),
+                    &proxy,
+                    toB3Vec3(info.translation),
+                    b3QueryFilter{.categoryBits = info.categoryBits, .maskBits = info.maskBits},
+                    ShapeCastCallback,
+                    &ctx);
 
-  std::unique_ptr<JPH::TempAllocatorImpl> tempAllocator;
-  std::unique_ptr<JPH::JobSystemThreadPool> jobSystem;
+  if (B3_IS_NULL(ctx.shapeId)) return std::nullopt;
 
-  bool initialized = false;
-};
+  return CastResult{
+    .bodyID = BodyIdFromB3(b3Shape_GetBody(ctx.shapeId)),
+    .position = vec3FromB3(ctx.point),
+    .normal = vec3FromB3(ctx.normal),
+  };
+}
 
-Physics::Physics() : impl(std::make_unique<Impl>()) {}
+bool OverlapCallback(b3ShapeId shapeId, void* context) {
+  b3BodyId bodyId = b3Shape_GetBody(shapeId);
+  b3Body_SetAwake(bodyId, true);
 
-Physics::~Physics() { Shutdown(); }
+  std::vector<Physics::BodyID>* entities = reinterpret_cast<std::vector<Physics::BodyID>*>(context);
 
-bool Physics::Initialize(const glm::vec3& gravity) {
-  // Jolt initialization
-  JPH::RegisterDefaultAllocator();
-  JPH::Factory::sInstance = new JPH::Factory();
-  JPH::RegisterTypes();
+  entities->push_back(BodyIdFromB3(bodyId));
 
-  impl->broadPhaseLayerInterface = std::make_unique<MapleBroadPhaseLayerInterface>();
-
-  impl->objectVsBroadPhaseLayerFilter = std::make_unique<JPH::ObjectVsBroadPhaseLayerFilter>();
-
-  impl->objectLayerPairFilter = std::make_unique<JPH::ObjectLayerPairFilter>();
-
-  // Temp values for now
-  // TODO: make values available as initialization struct
-  constexpr uint cMaxBodies = 1024 * 1024;
-  constexpr uint cNumBodyMutexes = 0;
-  constexpr uint cMaxBodyPairs = 64 * 1024;
-  constexpr uint cMaxContactConstraints = 64 * 1024;
-  constexpr uint cTempAllocatorSize = 100 * 1024 * 1024;
-
-  impl->physicsSystem.Init(cMaxBodies,
-                           cNumBodyMutexes,
-                           cMaxBodyPairs,
-                           cMaxContactConstraints,
-                           *impl->broadPhaseLayerInterface,
-                           *impl->objectVsBroadPhaseLayerFilter,
-                           *impl->objectLayerPairFilter);
-
-  impl->physicsSystem.SetGravity(hlp::ToJolt(gravity));
-
-  impl->bodyInterface = &impl->physicsSystem.GetBodyInterface();
-
-  impl->tempAllocator = std::make_unique<JPH::TempAllocatorImpl>(cTempAllocatorSize);
-
-  const uint maxJobs = 1024;
-  const uint maxBarriers = 1024;
-
-  impl->jobSystem = std::make_unique<JPH::JobSystemThreadPool>(maxJobs, maxBarriers, std::thread::hardware_concurrency() - 1);
-
-  impl->initialized = true;
-
+  // Return true to continue the query.
   return true;
 }
 
-void Physics::Shutdown() {
-  if (!impl || !impl->initialized) return;
+std::vector<Physics::BodyID> Physics::OverlapShape(const Physics::OverlapShapeInfo& info) const {
+  std::vector<Physics::BodyID> entities;
 
-  impl->initialized = false;
+  b3ShapeProxy proxy;
+  proxy.radius = info.pointsRadii;
+  proxy.count = info.points.size();
+  proxy.points = reinterpret_cast<const b3Vec3*>(info.points.data());
 
-  JPH::UnregisterTypes();
+  b3World_OverlapShape(impl->mWorldId,
+                       toB3Vec3(info.origin),
+                       &proxy,
+                       b3QueryFilter{.categoryBits = info.categoryBits, .maskBits = info.maskBits},
+                       OverlapCallback,
+                       &entities);
 
-  delete JPH::Factory::sInstance;
-  JPH::Factory::sInstance = nullptr;
+  return entities;
 }
 
-void Physics::Update(float deltaTime) {
-  if (!impl->initialized) return;
+std::vector<Physics::BodyID> Physics::OverlapSphere(const OverlapInfo& info, float radius) const {
+  std::array<glm::vec3, 1> point = {glm::vec3(0)};
+  OverlapShapeInfo shapeInfo{};
 
-  constexpr int collisionSteps = 1;
+  shapeInfo.origin = info.origin;
+  shapeInfo.categoryBits = info.categoryBits;
+  shapeInfo.maskBits = info.maskBits;
+  shapeInfo.points = point;
+  shapeInfo.pointsRadii = radius;
 
-  impl->physicsSystem.Update(deltaTime, collisionSteps, impl->tempAllocator.get(), impl->jobSystem.get());
+  return OverlapShape(shapeInfo);
 }
 
-JPH::Ref<JPH::Shape> constructShape(Physics::CollisionShape& shape) {
-  if (auto v = std::get_if<std::unique_ptr<Physics::CompoundShape>>(&shape)) {
-    auto settings = JPH::StaticCompoundShapeSettings();
-    for (auto& child : v->get()->children) {
-      settings.AddShape(hlp::ToJolt(child.position), hlp::ToJolt(child.orientation), constructShape(child.shape));
-    }
+std::vector<Physics::ContactHitEvent> Physics::GetGlobalContactHitEvents() const {
+  b3ContactEvents contactEvents = b3World_GetContactEvents(impl->mWorldId);
 
-    auto result = settings.Create();
-    if (result.HasError()) MAPLE_FATAL("failed to create physics shape: '{}'", result.GetError());
-    return JPH::Ref<JPH::Shape>(result.Get());
+  std::vector<ContactHitEvent> events(contactEvents.hitCount);
+
+  for (uint32_t i = 0; i < contactEvents.hitCount; i++) {
+    events[i] = {
+      .a = userDataFromB3(b3Body_GetUserData(b3Shape_GetBody(contactEvents.hitEvents[i].shapeIdA))),
+      .b = userDataFromB3(b3Body_GetUserData(b3Shape_GetBody(contactEvents.hitEvents[i].shapeIdB))),
+      .worldPoint = vec3FromB3(contactEvents.hitEvents[i].point),
+      .normal = vec3FromB3(contactEvents.hitEvents[i].normal),
+      .approachSpeed = contactEvents.hitEvents[i].approachSpeed,
+    };
   }
 
-  if (auto v = std::get_if<Physics::Sphere>(&shape)) {
-    auto result = JPH::SphereShapeSettings(v->radius).Create();
-    if (result.HasError()) MAPLE_FATAL("failed to create physics shape: '{}'", result.GetError());
-    return JPH::Ref<JPH::Shape>(result.Get());
-  }
-
-  if (auto v = std::get_if<Physics::Box>(&shape)) {
-    auto result = JPH::BoxShapeSettings(hlp::ToJolt(v->halfExtent)).Create();
-    if (result.HasError()) MAPLE_FATAL("failed to create physics shape: '{}'", result.GetError());
-    return JPH::Ref<JPH::Shape>(result.Get());
-  }
-
-  if (auto v = std::get_if<Physics::Capsule>(&shape)) {
-    auto result = JPH::CapsuleShapeSettings(v->halfHeight, v->radius).Create();
-    if (result.HasError()) MAPLE_FATAL("failed to create physics shape: '{}'", result.GetError());
-    return JPH::Ref<JPH::Shape>(result.Get());
-  }
-
-  if (auto v = std::get_if<Physics::TaperedCapsule>(&shape)) {
-    auto result = JPH::TaperedCapsuleShapeSettings(v->halfHeight, v->topRadius, v->bottomRadius).Create();
-    if (result.HasError()) MAPLE_FATAL("failed to create physics shape: '{}'", result.GetError());
-    return JPH::Ref<JPH::Shape>(result.Get());
-  }
-
-  if (auto v = std::get_if<Physics::Cylinder>(&shape)) {
-    auto result = JPH::CylinderShapeSettings(v->halfHeight, v->radius).Create();
-    if (result.HasError()) MAPLE_FATAL("failed to create physics shape: '{}'", result.GetError());
-    return JPH::Ref<JPH::Shape>(result.Get());
-  }
-
-  if (auto v = std::get_if<Physics::TaperedCylinder>(&shape)) {
-    auto result = JPH::TaperedCylinderShapeSettings(v->halfHeight, v->topRadius, v->bottomRadius).Create();
-    if (result.HasError()) MAPLE_FATAL("failed to create physics shape: '{}'", result.GetError());
-    return JPH::Ref<JPH::Shape>(result.Get());
-  }
-
-  if (auto v = std::get_if<Physics::ConvexHull>(&shape)) {
-    auto result = JPH::ConvexHullShapeSettings(reinterpret_cast<JPH::Vec3*>(v->points.data()), v->points.size()).Create();
-    if (result.HasError()) MAPLE_FATAL("failed to create physics shape: '{}'", result.GetError());
-    return JPH::Ref<JPH::Shape>(result.Get());
-  }
-
-  if (auto v = std::get_if<Physics::Triangle>(&shape)) {
-    auto result = JPH::TriangleShapeSettings(hlp::ToJolt(v->a), hlp::ToJolt(v->b), hlp::ToJolt(v->c)).Create();
-    if (result.HasError()) MAPLE_FATAL("failed to create physics shape: '{}'", result.GetError());
-    return JPH::Ref<JPH::Shape>(result.Get());
-  }
-
-  if (auto v = std::get_if<Physics::Plane>(&shape)) {
-    auto result = JPH::PlaneShapeSettings(JPH::Plane(hlp::ToJolt(v->normal), v->distance)).Create();
-    if (result.HasError()) MAPLE_FATAL("failed to create physics shape: '{}'", result.GetError());
-    return JPH::Ref<JPH::Shape>(result.Get());
-  }
-
-  if (Physics::HeightField* v = std::get_if<Physics::HeightField>(&shape)) {
-    auto result = JPH::HeightFieldShapeSettings(v->heights.get(), hlp::ToJolt(glm::vec3(0)), hlp::ToJolt(glm::vec3(1)), v->N).Create();
-    if (result.HasError()) MAPLE_FATAL("failed to create physics shape: '{}'", result.GetError());
-    return JPH::Ref<JPH::Shape>(result.Get());
-  }
-
-  if (Physics::Mesh* v = std::get_if<Physics::Mesh>(&shape)) {
-    JPH::VertexList vertices;
-    vertices.reserve(v->vertices.size());
-
-    for (auto& v : v->vertices) vertices.emplace_back(v.x, v.y, v.z);
-
-    JPH::IndexedTriangleList triangles;
-    triangles.reserve(v->indices.size() / 3);
-
-    for (size_t i = 0; i < v->indices.size(); i += 3) triangles.emplace_back(v->indices[i], v->indices[i + 1], v->indices[i + 2]);
-
-    auto result = JPH::MeshShapeSettings(vertices, triangles).Create();
-    if (result.HasError()) MAPLE_FATAL("failed to create physics shape: '{}'", result.GetError());
-    return JPH::Ref<JPH::Shape>(result.Get());
-  }
-
-  MAPLE_FATAL("unknown Collision Shape type");
-}
-
-Physics::BodyID Physics::CreateRigidBody(BodyInfo& info) {
-  if (!impl->initialized) return 0;
-  if (!info.Validate()) MAPLE_FATAL("invalid physics body info");
-  bool isStaticShape = std::holds_alternative<Physics::Mesh>(info.shape) || std::holds_alternative<Physics::HeightField>(info.shape);
-  if (isStaticShape && info.motionType != MotionType::Static) MAPLE_FATAL("mesh shape cannot be used on non-static geometry");
-
-  auto shape = constructShape(info.shape);
-
-  JPH::BodyCreationSettings settings(shape, JPH::RVec3(0, 0, 0), JPH::Quat::sIdentity(), JPH::EMotionType::Dynamic, Layers::MOVING);
-
-  settings.mUserData = info.entityID;
-  settings.mMotionType = hlp::ToJolt(info.motionType);
-  settings.mMotionQuality = hlp::ToJolt(info.motionQuality);
-  settings.mOverrideMassProperties = JPH::EOverrideMassProperties::CalculateInertia;
-  settings.mMassPropertiesOverride.mMass = info.mass;
-  settings.mInertiaMultiplier = info.intertiaMultiplier;
-  settings.mFriction = info.friction;
-  settings.mRestitution = info.restitution;
-  settings.mLinearDamping = info.linearDamping;
-  settings.mAngularDamping = info.angularDamping;
-
-  settings.mPosition = hlp::ToJolt(info.position);
-  settings.mRotation = hlp::ToJolt(info.orientation);
-
-  JPH::Body* body = impl->bodyInterface->CreateBody(settings);
-
-  if (!body) return 0;
-
-  impl->bodyInterface->AddBody(body->GetID(), JPH::EActivation::Activate);
-
-  return body->GetID().GetIndexAndSequenceNumber();
-}
-
-void Physics::DestroyRigidBody(BodyID id) {
-  if (!impl->initialized) return;
-
-  JPH::BodyID bodyID(id);
-
-  impl->bodyInterface->RemoveBody(bodyID);
-  impl->bodyInterface->DestroyBody(bodyID);
-}
-
-uint64_t Physics::GetBodyEntity(BodyID id) { return impl->bodyInterface->GetUserData(static_cast<JPH::BodyID>(id)); }
-
-glm::vec3 Physics::GetBodyPosition(BodyID id) const {
-  JPH::RVec3 v = impl->bodyInterface->GetPosition(static_cast<JPH::BodyID>(id));
-  return glm::vec3(v.GetX(), v.GetY(), v.GetZ());
-}
-
-glm::quat Physics::GetBodyRotation(BodyID id) const {
-  JPH::Quat v = impl->bodyInterface->GetRotation(static_cast<JPH::BodyID>(id));
-  return glm::quat(v.GetW(), v.GetX(), v.GetY(), v.GetZ());
-}
-
-void Physics::SetBodyPosition(BodyID id, const glm::vec3& pos) {
-  JPH::BodyID bodyID(id);
-
-  impl->bodyInterface->SetPosition(bodyID, JPH::RVec3(pos.x, pos.y, pos.z), JPH::EActivation::Activate);
-}
-
-void Physics::SetBodyRotation(BodyID id, const glm::quat& quat) {
-  JPH::BodyID bodyID(id);
-
-  impl->bodyInterface->SetRotation(bodyID, JPH::Quat(quat.x, quat.y, quat.z, quat.w), JPH::EActivation::Activate);
-}
-
-void Physics::ApplyForce(BodyID id, const glm::vec3& force) {
-  JPH::BodyID bodyID(id);
-
-  impl->bodyInterface->ActivateBody(bodyID);
-  impl->bodyInterface->AddForce(bodyID, JPH::Vec3(force.x, force.y, force.z));
-}
-
-std::optional<Physics::RayCastResult> Physics::Raycast(const glm::vec3& origin, const glm::vec3& dir, float distance) {
-  JPH::RayCastResult result;
-  JPH::RRayCast ray(JPH::RVec3(origin.x, origin.y, origin.z), JPH::Vec3(dir.x, dir.y, dir.z) * distance);
-  auto& query = impl->physicsSystem.GetNarrowPhaseQuery();
-  bool didHit = query.CastRay(ray, result);  // TODO: add filters for which things will be collided with
-
-  if (!didHit) return std::nullopt;
-
-  JPH::RVec3 hitPositionJolt = ray.GetPointOnRay(result.mFraction);
-
-  return Physics::RayCastResult{
-    .bodyID = result.mBodyID.GetIndexAndSequenceNumber(),
-    .position = glm::vec3(hitPositionJolt.GetX(), hitPositionJolt.GetY(), hitPositionJolt.GetZ()),
-  };
-}
-
-std::optional<Physics::RayCastResultWithNormal> Physics::RaycastWNormal(const glm::vec3& origin, const glm::vec3& dir, float distance) {
-  JPH::RayCastResult result;
-  JPH::RRayCast ray(JPH::RVec3(origin.x, origin.y, origin.z), JPH::Vec3(dir.x, dir.y, dir.z) * distance);
-  auto& query = impl->physicsSystem.GetNarrowPhaseQuery();
-  bool didHit = query.CastRay(ray, result);  // TODO: add filters for which things will be collided with
-
-  if (!didHit) return std::nullopt;
-
-  JPH::RVec3 hitPositionJolt = ray.GetPointOnRay(result.mFraction);
-
-  JPH::BodyLockRead lock(impl->physicsSystem.GetBodyLockInterface(), result.mBodyID);
-
-  if (!lock.Succeeded()) MAPLE_FATAL("failed to get lock on body");
-  const JPH::Body& body = lock.GetBody();
-
-  JPH::Vec3 normal = body.GetWorldSpaceSurfaceNormal(result.mSubShapeID2, hitPositionJolt);
-
-  return Physics::RayCastResultWithNormal{
-    .bodyID = result.mBodyID.GetIndexAndSequenceNumber(),
-    .position = glm::vec3(hitPositionJolt.GetX(), hitPositionJolt.GetY(), hitPositionJolt.GetZ()),
-    .normal = glm::vec3(normal.GetX(), normal.GetY(), normal.GetZ()),
-  };
-}
-
-std::vector<Physics::BodyID> Physics::OverlapSphere(Sphere shape, const glm::vec3& origin) {
-  std::vector<BodyID> result;
-
-  Physics::CollisionShape sh = shape;
-  auto joltShape = constructShape(sh);
-
-  class Collector : public JPH::CollideShapeCollector {
-   public:
-    std::vector<BodyID>& results;
-
-    Collector(std::vector<BodyID>& results) : results(results) {}
-
-    void AddHit(const JPH::CollideShapeResult& result) override { results.push_back(result.mBodyID2.GetIndexAndSequenceNumber()); }
-  };
-
-  Collector collector(result);
-
-  JPH::RMat44 CoMTrans = JPH::RMat44::sIdentity();
-  CoMTrans.SetTranslation(JPH::RVec3Arg(origin.x, origin.y, origin.z));  // TODO: fix
-  JPH::CollideShapeSettings settings;
-
-  auto& query = impl->physicsSystem.GetNarrowPhaseQuery();
-  query.CollideShape(joltShape, JPH::Vec3::sReplicate(1.0f), CoMTrans, settings, JPH::RVec3::sZero(), collector);
-
-  return result;
+  return events;
 }
 
 }  // namespace maple
