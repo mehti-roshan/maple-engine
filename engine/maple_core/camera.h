@@ -8,6 +8,7 @@ class Camera {
  public:
   const glm::dvec3& GetPosition() const;
   void SetPosition(const glm::vec3& position);
+  void SetOrientation(const glm::quat& orientation);
 
   void Pitch(float angle);
   void Yaw(float angle);

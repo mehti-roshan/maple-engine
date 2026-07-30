@@ -3,6 +3,7 @@
 namespace maple {
 const glm::dvec3& Camera::GetPosition() const { return mPosition; }
 void Camera::SetPosition(const glm::vec3& position) { mPosition = position; }
+void Camera::SetOrientation(const glm::quat& orientation) { mOrientation = orientation; }
 
 void Camera::Pitch(float angle) { mOrientation = glm::normalize(glm::angleAxis(angle, Right()) * mOrientation); }
 void Camera::Yaw(float angle) { mOrientation = glm::normalize(glm::angleAxis(angle, Up()) * mOrientation); }

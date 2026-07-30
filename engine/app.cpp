@@ -8,6 +8,9 @@
 #include <utility>
 #include <vector>
 
+#include "engine/maple_serializer/implementations.h"
+#include "engine/maple_serializer/read_stream.h"
+#include "engine/maple_serializer/write_stream.h"
 #include "enums.h"
 #include "maple_asset_loader/maple_asset_loader.h"
 #include "maple_core/prng.h"
