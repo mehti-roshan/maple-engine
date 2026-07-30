@@ -9,8 +9,9 @@ class Seed {
   explicit Seed(uint64_t value);
 
   uint64_t Value() const;
-
   Seed Derive(const std::string& name) const;
+
+  static uint64_t Mix64(uint64_t);
 
  private:
   uint64_t mValue = 0;
