@@ -15,6 +15,8 @@
 #include "maple_asset_loader/maple_asset_loader.h"
 #include "maple_core/prng.h"
 #include "maple_logging/log_macros.h"
+#include "maple_net_client.h"
+#include "maple_net_server.h"
 #include "maple_physics.h"
 #include "maple_renderer.h"
 #include "maple_renderer/render_graph.h"

@@ -2,15 +2,17 @@
 
 A cross-platform Game engine made with C++, featuring modern libraries and features.
 
-SDL3
-spdlog
-Vulkan
-Dear ImGui
-RmlUi
-EnTT
-Jolt Physics
-SoLoud
-Boost.Asio (Efficient async Disk and Networking with C++ 20 coroutines)
-FlatBuffers
-mio (Cross platform efficient memory mapped I/O)
-Sol2
+Used libraries:
+  SDL3
+  spdlog
+  glm
+  Vulkan
+  box3d
+  openal-soft
+  GameNetworkingSockets
+
+Libraries planned to integrate:
+  Dear ImGui
+  RmlUi
+  mio
+  Sol2
