@@ -21,7 +21,6 @@ glm::mat4 Camera::GetViewRotationOnly() const {
 
 glm::mat4 Camera::GetProjection(float aspectRatio, float fov, float nearPlane, float farPlane) const {
   glm::mat4 proj = glm::perspective(glm::radians(fov), aspectRatio, nearPlane, farPlane);
-  proj[1][1] *= -1.0f;  // Vulkan flip y coordinates
   return proj;
 }
 
