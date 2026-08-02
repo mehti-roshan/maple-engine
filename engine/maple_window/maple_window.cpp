@@ -1,6 +1,7 @@
 #include "maple_window.h"
 
 #include <SDL3/SDL.h>
+#include <SDL3/SDL_error.h>
 #include <SDL3/SDL_events.h>
 #include <SDL3/SDL_gamepad.h>
 #include <SDL3/SDL_joystick.h>
@@ -37,14 +38,19 @@ struct Window::Impl {
 Window::Window(Window&&) noexcept = default;
 Window& Window::operator=(Window&&) noexcept = default;
 
-Window::Window() = default;
-Window::Window(const CreateInfo& info) : impl(std::make_unique<Impl>()) {
-  if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) MAPLE_FATAL("SDL init failed: {}", SDL_GetError());
+Window::Window() : impl(std::make_unique<Impl>()) {};
+Window::~Window() { Destroy(); }
+
+bool Window::Init(const CreateInfo& info, std::string& err) {
+  if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
+    err = "SDL init failed: " + std::string(SDL_GetError());
+    return false;
+  }
 
   impl->sdlInitialized = true;
 
-  impl->window = SDL_CreateWindow(info.title.c_str(), 1920, 1080, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
-
+  impl->window =
+    SDL_CreateWindow(info.title.c_str(), 1920, 1080, SDL_WINDOW_RESIZABLE | (info.rendererAPI == OpenGL ? SDL_WINDOW_OPENGL : SDL_WINDOW_VULKAN));
   if (!impl->window) MAPLE_FATAL("SDL window creation failed: {}", SDL_GetError());
 
   int count = 0;
@@ -55,9 +61,46 @@ Window::Window(const CreateInfo& info) : impl(std::make_unique<Impl>()) {
   }
 
   SDL_free(joysticks);
+
+  return true;
 }
 
-Window::~Window() {
+bool Window::SetGlAttrib(int attrib, int v, std::string& err) {
+  if (!SDL_GL_SetAttribute((SDL_GLAttr)attrib, v)) {
+    err = SDL_GetError();
+    return false;
+  }
+  return true;
+}
+
+bool Window::CreateGlContext(void* ctx, std::string& err) {
+  ctx = SDL_GL_CreateContext(impl->window);
+  if (!ctx) {
+    err = SDL_GetError();
+    return false;
+  }
+  return true;
+}
+
+bool Window::DestroyGlContext(void* ctx, std::string& err) {
+  if (!SDL_GL_DestroyContext((SDL_GLContext)ctx)) {
+    err = SDL_GetError();
+    return false;
+  }
+  return true;
+}
+
+bool Window::GlPresent(std::string& err) {
+  if (!SDL_GL_SwapWindow(impl->window)) {
+    err = SDL_GetError();
+    return false;
+  }
+  return true;
+}
+
+Window::GLProc Window::GetGlProcAddress(const char* name) { return SDL_GL_GetProcAddress(name); }
+
+void Window::Destroy() {
   if (!impl) return;
 
   if (impl->window) {
@@ -69,24 +112,6 @@ Window::~Window() {
     SDL_Quit();
     impl->sdlInitialized = false;
   }
-}
-
-std::vector<const char*> Window::RequiredVkInstanceExtensions() const {
-  uint32_t count = 0;
-
-  const char* const* extensions = SDL_Vulkan_GetInstanceExtensions(&count);
-
-  return {extensions, extensions + count};
-}
-
-void* Window::CreateWindowSurface(void* instance) const {
-  VkSurfaceKHR surface{};
-
-  if (!SDL_Vulkan_CreateSurface(impl->window, static_cast<VkInstance>(instance), nullptr, &surface)) {
-    MAPLE_FATAL("SDL Vulkan surface failed: {}", SDL_GetError());
-  }
-
-  return surface;
 }
 
 void Window::SetTitle(const std::string& title) const { SDL_SetWindowTitle(impl->window, title.c_str()); }
@@ -112,10 +137,15 @@ void Window::DispatchEvent(const SDL_Event& e) const {
       break;
 
     case SDL_EVENT_WINDOW_RESIZED: {
-      auto size = GetFrameBufferSize();
+      std::string err;
+      int32_t x, y;
+      if (!GetFrameBufferSize(x, y, err)) {
+        MAPLE_WARN("failed to get window frame buffer size: {}", err);
+        break;
+      }
 
       for (auto& [_, cb] : impl->frameBufferSizeCallbacks) {
-        cb(size.first, size.second);
+        cb(x, y);
       }
 
       break;
@@ -219,12 +249,12 @@ void Window::UpdateJoySticks() const {
   }
 }
 
-std::pair<int32_t, int32_t> Window::GetFrameBufferSize() const {
-  int w, h;
-
-  SDL_GetWindowSizeInPixels(impl->window, &w, &h);
-
-  return {w, h};
+bool Window::GetFrameBufferSize(int32_t& x, int32_t& y, std::string& err) const {
+  if (!SDL_GetWindowSizeInPixels(impl->window, &x, &y)) {
+    err = SDL_GetError();
+    return false;
+  }
+  return true;
 }
 
 std::string Window::GetJoyStickName(int32_t jid) const {
