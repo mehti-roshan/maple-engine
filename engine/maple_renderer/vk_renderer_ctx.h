@@ -17,20 +17,12 @@
 namespace maple {
 class VkRendererCtx {
  public:
-  VkRendererCtx() = default;
-  VkRendererCtx(const std::vector<const char*>& glfwExtensions, SurfaceCreateCallback, FrameBufferSizeCallback);
+  bool Init(const std::vector<const char*>& glfwExtensions, SurfaceCreateCallback, FrameBufferSizeCallback, std::string& err);
   void Destroy() {
     if (mDevice.device != nullptr) {
       mDevice.device.waitIdle();
     }
   }
-  VkRendererCtx(VkRendererCtx&&) noexcept;
-  VkRendererCtx& operator=(VkRendererCtx&&) noexcept;
-
-  VkRendererCtx(VkRendererCtx&) noexcept = delete;
-  VkRendererCtx& operator=(VkRendererCtx&) noexcept = delete;
-
-  void Init(const std::vector<const char*>& glfwExtensions, SurfaceCreateCallback, FrameBufferSizeCallback);
 
   [[nodiscard]]
   vk::raii::CommandBuffer beginSingleTimeCommands();
@@ -55,9 +47,15 @@ class VkRendererCtx {
     vk::raii::Fence drawFence = nullptr;
   };
   std::vector<FrameData> mFrameData;
-  std::vector<vk::raii::Semaphore> mRenderCompleteSems;  // length: length of swapchain images
+  std::vector<vk::raii::Semaphore> mRenderCompleteSems;  // .size(): number of swapchain images
 
   static constexpr int MAX_FRAMES_IN_FLIGHT = 2;
+
+  VkRendererCtx() = default;
+  VkRendererCtx(VkRendererCtx&&) noexcept;
+  VkRendererCtx& operator=(VkRendererCtx&&) noexcept;
+  VkRendererCtx(VkRendererCtx&) noexcept = delete;
+  VkRendererCtx& operator=(VkRendererCtx&) noexcept = delete;
 
  private:
   void createCommandPools();

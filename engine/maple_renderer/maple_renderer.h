@@ -18,10 +18,12 @@ namespace maple {
 class Renderer {
  public:
   Renderer();
-  Renderer(const std::vector<const char*>& glfwExtensions, SurfaceCreateCallback, FrameBufferSizeCallback);
   ~Renderer();
   Renderer(Renderer&&) noexcept;
   Renderer& operator=(Renderer&&) noexcept;
+
+  bool Init(const std::vector<const char*>& requiredExtensions, SurfaceCreateCallback, FrameBufferSizeCallback, std::string& err);
+  void Destroy();
 
   void SetFrameBufferResized() { mFrameBufferResized = true; };
 

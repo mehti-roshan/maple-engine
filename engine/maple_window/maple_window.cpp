@@ -65,6 +65,20 @@ bool Window::Init(const CreateInfo& info, std::string& err) {
   return true;
 }
 
+void Window::Destroy() {
+  if (!impl) return;
+
+  if (impl->window) {
+    SDL_DestroyWindow(impl->window);
+    impl->window = nullptr;
+  }
+
+  if (impl->sdlInitialized) {
+    SDL_Quit();
+    impl->sdlInitialized = false;
+  }
+}
+
 bool Window::SetGlAttrib(int attrib, int v, std::string& err) {
   if (!SDL_GL_SetAttribute((SDL_GLAttr)attrib, v)) {
     err = SDL_GetError();
@@ -98,21 +112,22 @@ bool Window::GlPresent(std::string& err) {
   return true;
 }
 
-Window::GLProc Window::GetGlProcAddress(const char* name) { return SDL_GL_GetProcAddress(name); }
-
-void Window::Destroy() {
-  if (!impl) return;
-
-  if (impl->window) {
-    SDL_DestroyWindow(impl->window);
-    impl->window = nullptr;
-  }
-
-  if (impl->sdlInitialized) {
-    SDL_Quit();
-    impl->sdlInitialized = false;
-  }
+std::vector<const char*> Window::RequiredVkInstanceExtensions() const {
+  uint32_t count = 0;
+  const char* const* extensions = SDL_Vulkan_GetInstanceExtensions(&count);
+  return {extensions, extensions + count};
 }
+
+void* Window::CreateWindowSurface(void* pVkInstance) const {
+  VkSurfaceKHR surface{};
+  if (!SDL_Vulkan_CreateSurface(impl->window, static_cast<VkInstance>(pVkInstance), nullptr, &surface)) {
+    MAPLE_DEBUG("failed to create SDL Vulkan surface: {}", SDL_GetError());
+    return nullptr;
+  }
+  return surface;
+}
+
+Window::GLProc Window::GetGlProcAddress(const char* name) { return SDL_GL_GetProcAddress(name); }
 
 void Window::SetTitle(const std::string& title) const { SDL_SetWindowTitle(impl->window, title.c_str()); }
 

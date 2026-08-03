@@ -58,8 +58,8 @@
  */
 namespace maple {
 struct VulkanPhysicalDevice {
-  vk::raii::PhysicalDevice device;
-  QueueFamilyIndices queueFamilyIndices;
+  vk::raii::PhysicalDevice device = nullptr;
+  QueueFamilyIndices queueFamilyIndices{};
 
   struct CreateInfo {
     const vk::raii::SurfaceKHR& surface;
@@ -68,10 +68,11 @@ struct VulkanPhysicalDevice {
     DeviceFeatureMask requiredFeatureMask{};
   };
 
-  // Default constructor
-  VulkanPhysicalDevice() : device(nullptr), queueFamilyIndices({}), mSurface(nullptr) {}
+  VulkanPhysicalDevice() = default;
 
-  VulkanPhysicalDevice(const CreateInfo& info) : device(nullptr), mSurface(&info.surface) {
+  bool Init(const CreateInfo& info, std::string& err)  {
+    mSurface = &info.surface;
+
     std::map<float, uint32_t> scoredDevices;
 
     for (uint32_t i = 0; i < info.availableDevices.size(); ++i) {
@@ -83,12 +84,16 @@ struct VulkanPhysicalDevice {
       scoredDevices.insert({score, i});
     }
 
-    if (scoredDevices.empty()) MAPLE_FATAL("Failed to find suitable GPU");
+    if (scoredDevices.empty()) {
+      err = "Failed to find suitable GPU";
+      return false;
+    }
 
     auto idx = scoredDevices.rbegin()->second;
 
     device = info.availableDevices[idx];
     queueFamilyIndices = getQueueFamilyIndices(device, *mSurface);
+    return true;
   }
 
   vk::SurfaceCapabilitiesKHR SurfaceCapabilities() const { return device.getSurfaceCapabilitiesKHR(*mSurface); }
@@ -109,7 +114,7 @@ struct VulkanPhysicalDevice {
   auto GetProperties() const { return device.getProperties(); }
 
  private:
-  const vk::raii::SurfaceKHR* mSurface;
+  const vk::raii::SurfaceKHR* mSurface = nullptr;
 
   static QueueFamilyIndices getQueueFamilyIndices(const vk::raii::PhysicalDevice& device, const vk::raii::SurfaceKHR& surface) {
     QueueFamilyIndices indices{};

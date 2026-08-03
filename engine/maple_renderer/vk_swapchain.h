@@ -63,7 +63,7 @@ struct VulkanSwapChain {
   VulkanSwapChain(const CreateInfo& info) : swapchain(nullptr) { create(info); }
 
   void ReCreate(const CreateInfo& info) {
-    uint32_t width, height;
+    int32_t width, height;
     info.framebufferSizeCb(width, height);
     while (width == 0 || height == 0) {
       MAPLE_DEBUG("minimized...");
@@ -164,11 +164,11 @@ struct VulkanSwapChain {
 
     // else, we query the windowed frame buffer's size, and return that
     // but making sure it respects minimum and maximum swapchain image sizes
-    uint32_t width, height;
+    int32_t width, height;
     fbCallback(width, height);
 
-    return {std::clamp(width, capabilities.minImageExtent.width, capabilities.maxImageExtent.width),
-            std::clamp(height, capabilities.minImageExtent.height, capabilities.maxImageExtent.height)};
+    return {std::clamp(uint32_t(width), capabilities.minImageExtent.width, capabilities.maxImageExtent.width),
+            std::clamp(uint32_t(height), capabilities.minImageExtent.height, capabilities.maxImageExtent.height)};
   }
 
   static vk::Format findDepthFormat(const VulkanPhysicalDevice& physicalDevice) {

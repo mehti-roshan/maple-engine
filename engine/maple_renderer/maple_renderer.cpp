@@ -428,7 +428,9 @@ void Renderer::DrawFrame(const UBO& frameUBO, const RenderGraph::CompileResult& 
         }
 
         cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, mat.Pipeline().value().GetPipeline());
-        cmd.setViewport(0, vk::Viewport{0.0f, 0.0f, static_cast<float>(renderingArea->x), static_cast<float>(renderingArea->y), 0.0f, 1.0f});
+        // here we set start y = renderingAreaHeight and the height to negative of the renderingAreaHeight
+        // this is to correct vulkan's flipped Y coordinates
+        cmd.setViewport(0, vk::Viewport{0.0f, static_cast<float>(renderingArea->y), static_cast<float>(renderingArea->x), -static_cast<float>(renderingArea->y), 0.0f, 1.0f});
         vk::Rect2D scissor{vk::Offset2D{0, 0}, vk::Extent2D{.width = renderingArea->x, .height = renderingArea->y}};
         cmd.setScissor(0, {scissor});
 
@@ -548,10 +550,15 @@ void Renderer::DrawFrame(const UBO& frameUBO, const RenderGraph::CompileResult& 
 }
 
 Renderer::Renderer() : impl(std::make_unique<Impl>()) {}
-Renderer::Renderer(const std::vector<const char*>& glfwExtensions, SurfaceCreateCallback surfaceCb, FrameBufferSizeCallback frameBufferSizeCb)
-    : impl(std::make_unique<Impl>()) {
+
+void Renderer::Destroy() {
+  if (!impl) return;
+  impl->mCtx.Destroy();
+}
+
+bool Renderer::Init(const std::vector<const char*>& requiredExtensions, SurfaceCreateCallback surfaceCb, FrameBufferSizeCallback frameBufferSizeCb, std::string& err) {
   auto& ctx = impl->mCtx;
-  ctx.Init(glfwExtensions, surfaceCb, frameBufferSizeCb);
+  ctx.Init(requiredExtensions, surfaceCb, frameBufferSizeCb, err);
 
   impl->mGlobalDescriptorPool = vkm::DescriptorPool(vkm::DescriptorPool::CreateInfo{
     .device = ctx.mDevice.device,
@@ -640,12 +647,11 @@ Renderer::Renderer(const std::vector<const char*>& glfwExtensions, SurfaceCreate
     std::array writes = {writeUbo, writeInstance, writeMaterial};
     ctx.mDevice.device.updateDescriptorSets(writes, {});
   }
+
+  return true;
 }
-Renderer::~Renderer() {
-  if (impl) {
-    impl->mCtx.Destroy();
-  }
-};
+
+Renderer::~Renderer() { Destroy(); };
 
 Renderer::Renderer(Renderer&&) noexcept = default;
 Renderer& Renderer::operator=(Renderer&&) noexcept = default;

@@ -6,22 +6,17 @@
 #include <cstddef>
 #include <cstdlib>
 #include <cstring>
+#include <glm/ext/matrix_clip_space.hpp>
+#include <glm/ext/matrix_transform.hpp>
+#include <glm/fwd.hpp>
 #include <glm/geometric.hpp>
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 #include <glm/trigonometric.hpp>
 #include <vulkan/vulkan.hpp>
 #include <vulkan/vulkan_enums.hpp>
 
 #include "vk_device_features.h"
-
-#define GLM_FORCE_RADIANS
-#include <glm/ext/matrix_clip_space.hpp>
-#include <glm/ext/matrix_transform.hpp>
-#include <glm/fwd.hpp>
-#include <glm/glm.hpp>
-#include <glm/gtc/matrix_transform.hpp>
-
-#define TINYOBJLOADER_IMPLEMENTATION
-
 #include "vk_physical_device.h"
 
 #ifdef NDEBUG
@@ -37,17 +32,27 @@ auto requiredFeatures = DeviceFeature::SamplerAnisotropy | DeviceFeature::Shader
   DeviceFeature::DynamicRendering | DeviceFeature::ExtendedDynamicState | DeviceFeature::BufferDeviceAddress | DeviceFeature::DescriptorIndexing |
   DeviceFeature::ShaderInt64 | DeviceFeature::ScalarBlockLayout;
 
-void VkRendererCtx::Init(const std::vector<const char*>& glfwExtensions, SurfaceCreateCallback surfaceCallback, FrameBufferSizeCallback fbCallback) {
+bool VkRendererCtx::Init(const std::vector<const char*>& glfwExtensions,
+                         SurfaceCreateCallback surfaceCallback,
+                         FrameBufferSizeCallback fbCallback,
+                         std::string& err) {
   mFrameBufferSizeCallback = fbCallback;
   mInstanceCtx = std::move(VulkanInstanceContext(glfwExtensions, debug));
-  mSurface = vk::raii::SurfaceKHR(mInstanceCtx.mInstance, (VkSurfaceKHR)surfaceCallback(*mInstanceCtx.mInstance));
+  auto surface = (VkSurfaceKHR)surfaceCallback(*mInstanceCtx.mInstance);
+  if (!surface) {
+    err = "renderer failed to create vulkan surface";
+    return false;
+  }
+  mSurface = vk::raii::SurfaceKHR(mInstanceCtx.mInstance, surface);
 
-  mPhysicalDevice = VulkanPhysicalDevice(VulkanPhysicalDevice::CreateInfo{
-    .surface = mSurface,
-    .availableDevices = mInstanceCtx.mInstance.enumeratePhysicalDevices(),
-    .requiredDeviceExtensions = requiredDeviceExtensions,
-    .requiredFeatureMask = requiredFeatures,
-  });
+  mPhysicalDevice.Init(
+    VulkanPhysicalDevice::CreateInfo{
+      .surface = mSurface,
+      .availableDevices = mInstanceCtx.mInstance.enumeratePhysicalDevices(),
+      .requiredDeviceExtensions = requiredDeviceExtensions,
+      .requiredFeatureMask = requiredFeatures,
+    },
+    err);
 
   mDevice = VulkanLogicalDevice(VulkanLogicalDevice::CreateInfo{
     .physicalDevice = mPhysicalDevice,
@@ -64,6 +69,8 @@ void VkRendererCtx::Init(const std::vector<const char*>& glfwExtensions, Surface
 
   createCommandPools();
   createFrameData();
+
+  return true;
 }
 
 void VkRendererCtx::createCommandPools() {

@@ -13,3 +13,5 @@ add_subdirectory(maple_window)
 target_include_directories(maple_app PUBLIC ${CMAKE_SOURCE_DIR})
 
 target_link_libraries(maple_app maple_asset_loader maple_audio maple_core maple_physics maple_logging maple_net maple_renderer maple_serializer maple_window)
+
+target_compile_definitions(maple_app PUBLIC GLM_FORCE_DEPTH_ZERO_TO_ONE)

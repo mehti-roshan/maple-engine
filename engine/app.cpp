@@ -1,37 +1,28 @@
+#include "app.h"
+
 #include <bit>
 #include <cstdlib>
 #include <ctime>
+#include <glm/ext/matrix_clip_space.hpp>
+#include <glm/ext/matrix_transform.hpp>
+#include <glm/ext/quaternion_geometric.hpp>
 #include <glm/ext/quaternion_transform.hpp>
 #include <glm/ext/quaternion_trigonometric.hpp>
+#include <glm/glm.hpp>
 #include <glm/gtc/constants.hpp>
 #include <optional>
 #include <utility>
 #include <vector>
 
-#include "engine/maple_serializer/implementations.h"
-#include "engine/maple_serializer/read_stream.h"
-#include "engine/maple_serializer/write_stream.h"
 #include "enums.h"
 #include "maple_asset_loader/maple_asset_loader.h"
 #include "maple_core/prng.h"
 #include "maple_logging/log_macros.h"
-#include "maple_net_client.h"
-#include "maple_net_server.h"
 #include "maple_physics.h"
 #include "maple_renderer.h"
 #include "maple_renderer/render_graph.h"
 #include "maple_window/maple_window.h"
-#include "material_builder_data.h"
 #include "pool.h"
-
-#define GLM_FORCE_DEPTH_ZERO_TO_ONE
-#define GLM_FORCE_RADIANS
-#include <glm/ext/matrix_clip_space.hpp>
-#include <glm/ext/matrix_transform.hpp>
-#include <glm/ext/quaternion_geometric.hpp>
-#include <glm/glm.hpp>
-
-#include "app.h"
 
 namespace maple {
 
@@ -39,7 +30,10 @@ void App::Init() {
   logging::Log::init();
   MAPLE_INFO("Initializing...");
 
-  mWindow = Window({.title = "Maple"});
+  std::string err;
+  if (!mWindow.Init({.title = "Maple", .rendererAPI = Window::Vulkan}, err)) {
+    MAPLE_FATAL("failed to create window: {}", err);
+  }
 
   mWindow.LockCursor();
   mWindow.AddFramebufferSizeCallback([&](int32_t width, int32_t height) { mRenderer.SetFrameBufferResized(); });
@@ -63,14 +57,17 @@ void App::Init() {
 
   mPhysics = Physics({glm::vec3(0, -9.81, 0)});
 
-  mRenderer = Renderer(
+  bool rendererInit = mRenderer.Init(
     mWindow.RequiredVkInstanceExtensions(),
     [&](void* pVkInstance) { return mWindow.CreateWindowSurface(pVkInstance); },
-    [&](uint32_t& width, uint32_t& height) {
-      auto [x, y] = mWindow.GetFrameBufferSize();
-      width = x;
-      height = y;
-    });
+    [&](int32_t& width, int32_t& height) {
+      std::string err;
+      if (!mWindow.GetFrameBufferSize(width, height, err)) {
+        MAPLE_WARN("failed to get frame buffer size: {}", err);
+      }
+    },
+    err);
+  if (!rendererInit) MAPLE_FATAL("failed to initialize renderer: {}", err);
 
   auto formats = {Format::D32_SFLOAT, Format::D32_SFLOAT_S8, Format::D24_UNORM_S8};
   auto depthFormat = mRenderer.FindFirstSupportedDepthAttachmentFormat(formats);
@@ -345,7 +342,12 @@ void App::Run() {
       instances.push_back(transform);
     }
 
-    auto [frameBufferX, frameBufferY] = mWindow.GetFrameBufferSize();
+    std::string err;
+    int32_t frameBufferX, frameBufferY;
+    if (!mWindow.GetFrameBufferSize(frameBufferX, frameBufferY, err)) {
+      MAPLE_WARN("failed to get frame buffer size: {}", err);
+      continue;
+    }
     Renderer::UBO ubo{
       .view = mCam.GetViewRotationOnly(),
       .proj = mCam.GetProjection(float(frameBufferX) / frameBufferY, 60.0f, 0.1f, 1000.0f),
@@ -365,6 +367,10 @@ void App::Run() {
   }
 }
 
-App::~App() { MAPLE_INFO("Shutting down..."); }
+App::~App() {
+  MAPLE_INFO("Shutting down...");
+  mRenderer.Destroy();
+  mWindow.Destroy();
+}
 
 }  // namespace maple
