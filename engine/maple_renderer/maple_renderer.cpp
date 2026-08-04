@@ -1,3 +1,7 @@
+#ifndef NDEBUG
+#define RENDERER_DEBUG
+#endif
+
 #include "maple_renderer.h"
 
 #include <algorithm>
@@ -430,7 +434,10 @@ void Renderer::DrawFrame(const UBO& frameUBO, const RenderGraph::CompileResult& 
         cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, mat.Pipeline().value().GetPipeline());
         // here we set start y = renderingAreaHeight and the height to negative of the renderingAreaHeight
         // this is to correct vulkan's flipped Y coordinates
-        cmd.setViewport(0, vk::Viewport{0.0f, static_cast<float>(renderingArea->y), static_cast<float>(renderingArea->x), -static_cast<float>(renderingArea->y), 0.0f, 1.0f});
+        cmd.setViewport(
+          0,
+          vk::Viewport{
+            0.0f, static_cast<float>(renderingArea->y), static_cast<float>(renderingArea->x), -static_cast<float>(renderingArea->y), 0.0f, 1.0f});
         vk::Rect2D scissor{vk::Offset2D{0, 0}, vk::Extent2D{.width = renderingArea->x, .height = renderingArea->y}};
         cmd.setScissor(0, {scissor});
 
@@ -556,7 +563,10 @@ void Renderer::Destroy() {
   impl->mCtx.Destroy();
 }
 
-bool Renderer::Init(const std::vector<const char*>& requiredExtensions, SurfaceCreateCallback surfaceCb, FrameBufferSizeCallback frameBufferSizeCb, std::string& err) {
+bool Renderer::Init(const std::vector<const char*>& requiredExtensions,
+                    SurfaceCreateCallback surfaceCb,
+                    FrameBufferSizeCallback frameBufferSizeCb,
+                    std::string& err) {
   auto& ctx = impl->mCtx;
   ctx.Init(requiredExtensions, surfaceCb, frameBufferSizeCb, err);
 
