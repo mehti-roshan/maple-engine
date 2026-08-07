@@ -1,9 +1,11 @@
 option(MAPLE_PHYSICS_DOUBLE_PRECISION "Build Physics engine with double precision" OFF)
 
 include(FetchContent)
-FetchContent_Declare(box3d
-GIT_REPOSITORY https://github.com/erincatto/box3d.git
-GIT_TAG v0.1.0)
+FetchContent_Declare(
+  box3d
+  GIT_REPOSITORY https://github.com/erincatto/box3d.git
+  GIT_TAG v0.1.0
+)
 
 set(BOX3D_DOUBLE_PRECISION ${MAPLE_PHYSICS_DOUBLE_PRECISION})
 
